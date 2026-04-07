@@ -1,6 +1,8 @@
 import { DataTable } from "@/components/data-table";
+import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import { FilterForm } from "@/components/filter-form";
 import { getMembersWithHoldings } from "@/lib/domain/member-service";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import type { MemberQueryFilters } from "@/lib/db/schema-types";
 
 interface HomePageProps {
@@ -21,7 +23,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 		sortDirection: sortDirectionValue === "asc" || sortDirectionValue === "desc" ? sortDirectionValue : "desc"
 	};
 
-	const rows = await getMembersWithHoldings(filters);
+	let rows;
+	try {
+		rows = await getMembersWithHoldings(filters);
+	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return (
+				<DatabaseSetupRequired
+					title="Database setup required"
+					description="Member holdings cannot be loaded until a Postgres database is configured."
+				/>
+			);
+		}
+		throw error;
+	}
 
 	return (
 		<>

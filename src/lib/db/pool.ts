@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { DatabaseNotConfiguredError } from "@/lib/db/errors";
 import { loadServerEnv } from "@/lib/env/server-env";
 
 let sharedPool: Pool | null = null;
@@ -10,7 +11,7 @@ export function getDatabasePool(): Pool {
 
 	const env = loadServerEnv();
 	if (!env.databaseUrl) {
-		throw new Error("DATABASE_URL is required for database-backed operations.");
+		throw new DatabaseNotConfiguredError();
 	}
 
 	sharedPool = new Pool({

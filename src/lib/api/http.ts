@@ -27,3 +27,17 @@ export function internalError(message: string) {
 		{ status: 500 }
 	);
 }
+
+export function serviceUnavailable(code: string, message: string) {
+	return NextResponse.json(
+		{
+			error: message,
+			code
+		},
+		{ status: 503 }
+	);
+}
+
+export function databaseSetupRequired(message = "Database is not configured. Set DATABASE_URL and run db:setup.") {
+	return serviceUnavailable("database_not_configured", message);
+}

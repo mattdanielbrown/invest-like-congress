@@ -1,7 +1,22 @@
+import { DatabaseSetupRequired } from "@/components/database-setup-required";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { listQuarantinedTransactions } from "@/lib/db/repository";
 
 export default async function QuarantinePage() {
-	const rows = await listQuarantinedTransactions(200);
+	let rows;
+	try {
+		rows = await listQuarantinedTransactions(200);
+	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return (
+				<DatabaseSetupRequired
+					title="Database setup required"
+					description="Quarantine review data is unavailable until the database is configured."
+				/>
+			);
+		}
+		throw error;
+	}
 
 	return (
 		<section>

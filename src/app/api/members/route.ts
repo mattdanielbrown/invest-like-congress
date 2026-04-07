@@ -1,5 +1,6 @@
 import { getMembersWithHoldings } from "@/lib/domain/member-service";
-import { internalError, okJson } from "@/lib/api/http";
+import { databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
 export async function GET(request: Request) {
 	try {
@@ -19,6 +20,9 @@ export async function GET(request: Request) {
 
 		return okJson({ rows, count: rows.length });
 	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return databaseSetupRequired();
+		}
 		console.error("members-api-failure", error);
 		return internalError("Failed to fetch member holdings.");
 	}

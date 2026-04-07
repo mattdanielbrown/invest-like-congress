@@ -1,5 +1,6 @@
 import { getAssetActivityById } from "@/lib/domain/asset-service";
-import { internalError, notFound, okJson } from "@/lib/api/http";
+import { databaseSetupRequired, internalError, notFound, okJson } from "@/lib/api/http";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
 interface RouteContext {
 	params: Promise<{
@@ -17,6 +18,9 @@ export async function GET(_request: Request, context: RouteContext) {
 
 		return okJson({ row });
 	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return databaseSetupRequired();
+		}
 		console.error("asset-activity-api-failure", error);
 		return internalError("Failed to fetch asset activity.");
 	}

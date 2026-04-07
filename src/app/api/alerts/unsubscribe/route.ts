@@ -1,5 +1,6 @@
 import { unsubscribeAlertAddress } from "@/lib/domain/alert-service";
-import { badRequest, internalError, okJson } from "@/lib/api/http";
+import { badRequest, databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
 function isEmailAddress(value: string): boolean {
 	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -17,6 +18,9 @@ export async function POST(request: Request) {
 		const unsubscribed = await unsubscribeAlertAddress(emailAddress);
 		return okJson({ unsubscribed });
 	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return databaseSetupRequired();
+		}
 		console.error("unsubscribe-api-failure", error);
 		return internalError("Failed to unsubscribe email address.");
 	}

@@ -13,14 +13,6 @@ import type {
 } from "@/lib/domain/types";
 import type { OfficialFilingRecord } from "@/lib/ingestion/official-sources";
 import type { ParsedFilingBatch } from "@/lib/ingestion/parser";
-import {
-	sampleAlertSubscriptions,
-	sampleAssetActivityRows,
-	sampleMemberRows,
-	samplePositionChangeEvents,
-	sampleStatus,
-	sampleTransactionsWithPresentation
-} from "@/lib/source-data/sample-seed";
 
 interface StatusRow {
 	lastIngestionAt: string | null;
@@ -49,25 +41,13 @@ interface PersistRawDocumentInput {
 	contentLength: number;
 }
 
-const fallbackSubscriptions = [...sampleAlertSubscriptions];
-const fallbackEvents = [...samplePositionChangeEvents];
-const fallbackIngestionCheckpoints = new Map<string, IngestionCheckpoint>();
-const fallbackQuarantineRows: Array<{ sourceDocumentId: string; reason: string; createdAt: string }> = [];
-
-function getPoolOrNull(): Pool | null {
-	try {
-		return getDatabasePool();
-	} catch {
-		return null;
-	}
+function getRequiredPool(): Pool {
+	return getDatabasePool();
 }
 
 export async function listMembersWithHoldings(filters: MemberQueryFilters): Promise<MemberHoldingsRow[]> {
 	void filters;
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return sampleMemberRows;
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT
@@ -108,10 +88,7 @@ export async function listMembersWithHoldings(filters: MemberQueryFilters): Prom
 }
 
 export async function listMemberTransactions(memberId: string): Promise<TransactionWithPresentation[]> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return sampleTransactionsWithPresentation.filter((row) => row.transaction.memberId === memberId);
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT
@@ -209,10 +186,7 @@ export async function listMemberTransactions(memberId: string): Promise<Transact
 }
 
 export async function getAssetActivity(assetId: string): Promise<AssetActivityRow | null> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return sampleAssetActivityRows.find((row) => row.asset.id === assetId) ?? null;
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT
@@ -258,10 +232,7 @@ export async function getAssetActivity(assetId: string): Promise<AssetActivityRo
 }
 
 export async function getSystemStatus(): Promise<StatusRow> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return sampleStatus;
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT
@@ -293,29 +264,8 @@ export async function getSystemStatus(): Promise<StatusRow> {
 }
 
 export async function upsertAlertSubscription(emailAddress: string, preference: SubscriptionPreference): Promise<AlertSubscription> {
-	const pool = getPoolOrNull();
+	const pool = getRequiredPool();
 	const verificationToken = randomUUID();
-
-	if (!pool) {
-		const existing = fallbackSubscriptions.find((subscription) => subscription.emailAddress.toLowerCase() === emailAddress.toLowerCase());
-		if (existing) {
-			existing.preference = preference;
-			existing.unsubscribedAt = null;
-			return existing;
-		}
-
-		const subscription: AlertSubscription = {
-			id: `subscription-${randomUUID()}`,
-			emailAddress,
-			isVerified: false,
-			verificationToken,
-			unsubscribedAt: null,
-			preference,
-			createdAt: new Date().toISOString()
-		};
-		fallbackSubscriptions.push(subscription);
-		return subscription;
-	}
 
 	const query = `
 		INSERT INTO alert_subscriptions (email_address, is_verified, verification_token, preference_json)
@@ -343,15 +293,7 @@ export async function upsertAlertSubscription(emailAddress: string, preference: 
 }
 
 export async function unsubscribeAlertEmail(emailAddress: string): Promise<boolean> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		const subscription = fallbackSubscriptions.find((item) => item.emailAddress.toLowerCase() === emailAddress.toLowerCase());
-		if (!subscription) {
-			return false;
-		}
-		subscription.unsubscribedAt = new Date().toISOString();
-		return true;
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		UPDATE alert_subscriptions
@@ -363,17 +305,12 @@ export async function unsubscribeAlertEmail(emailAddress: string): Promise<boole
 }
 
 export async function enqueuePositionChangeEvent(event: Omit<PositionChangeEvent, "id" | "createdAt">): Promise<PositionChangeEvent> {
-	const pool = getPoolOrNull();
+	const pool = getRequiredPool();
 	const row: PositionChangeEvent = {
 		...event,
 		id: randomUUID(),
 		createdAt: new Date().toISOString()
 	};
-
-	if (!pool) {
-		fallbackEvents.push(row);
-		return row;
-	}
 
 	const query = `
 		INSERT INTO position_change_events (
@@ -404,10 +341,7 @@ export async function enqueuePositionChangeEvent(event: Omit<PositionChangeEvent
 }
 
 export async function listPendingPositionEvents(limit = 100): Promise<PositionChangeEvent[]> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return fallbackEvents.slice(0, limit);
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT id, member_id, asset_id, action, share_delta, realized_profit_loss, source_transaction_id, created_at
@@ -431,10 +365,7 @@ export async function listPendingPositionEvents(limit = 100): Promise<PositionCh
 }
 
 export async function listVerifiedSubscriptions(): Promise<AlertSubscription[]> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return fallbackSubscriptions.filter((subscription) => subscription.isVerified && subscription.unsubscribedAt === null);
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT id, email_address, is_verified, verification_token, unsubscribed_at, preference_json, created_at
@@ -454,27 +385,13 @@ export async function listVerifiedSubscriptions(): Promise<AlertSubscription[]> 
 }
 
 export async function markPositionEventProcessed(eventId: string): Promise<void> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		const index = fallbackEvents.findIndex((event) => event.id === eventId);
-		if (index >= 0) {
-			fallbackEvents.splice(index, 1);
-		}
-		return;
-	}
+	const pool = getRequiredPool();
 
 	await pool.query("UPDATE position_change_events SET processed_at = now() WHERE id = $1", [eventId]);
 }
 
 export async function listQuarantinedTransactions(limit = 100): Promise<{ id: string; reason: string; createdAt: string }[]> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return fallbackQuarantineRows.slice(0, limit).map((row) => ({
-			id: row.sourceDocumentId,
-			reason: row.reason,
-			createdAt: row.createdAt
-		}));
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		SELECT source_document_id, reason, created_at
@@ -491,15 +408,7 @@ export async function listQuarantinedTransactions(limit = 100): Promise<{ id: st
 }
 
 export async function verifyAlertSubscriptionByToken(token: string): Promise<boolean> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		const subscription = fallbackSubscriptions.find((entry) => entry.verificationToken === token);
-		if (!subscription) {
-			return false;
-		}
-		subscription.isVerified = true;
-		return true;
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		UPDATE alert_subscriptions
@@ -511,11 +420,7 @@ export async function verifyAlertSubscriptionByToken(token: string): Promise<boo
 }
 
 export async function updateSystemStatus(status: Partial<StatusRow>): Promise<void> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		Object.assign(sampleStatus, status);
-		return;
-	}
+	const pool = getRequiredPool();
 
 	const query = `
 		UPDATE system_status
@@ -536,10 +441,7 @@ export async function updateSystemStatus(status: Partial<StatusRow>): Promise<vo
 }
 
 export async function getIngestionCheckpoint(sourceSystem: string, cursorKey: string): Promise<IngestionCheckpoint | null> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return fallbackIngestionCheckpoints.get(`${sourceSystem}:${cursorKey}`) ?? null;
-	}
+	const pool = getRequiredPool();
 
 	const result = await pool.query(
 		`SELECT source_system, cursor_key, last_seen_filed_at, last_run_at
@@ -562,16 +464,7 @@ export async function getIngestionCheckpoint(sourceSystem: string, cursorKey: st
 }
 
 export async function upsertIngestionCheckpoint(sourceSystem: string, cursorKey: string, lastSeenFiledAt: string | null): Promise<void> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		fallbackIngestionCheckpoints.set(`${sourceSystem}:${cursorKey}`, {
-			sourceSystem,
-			cursorKey,
-			lastSeenFiledAt,
-			lastRunAt: new Date().toISOString()
-		});
-		return;
-	}
+	const pool = getRequiredPool();
 
 	await pool.query(
 		`INSERT INTO ingestion_checkpoints (source_system, cursor_key, last_seen_filed_at, last_run_at)
@@ -585,10 +478,7 @@ export async function upsertIngestionCheckpoint(sourceSystem: string, cursorKey:
 }
 
 export async function persistRawDocumentCache(entry: PersistRawDocumentInput): Promise<void> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return;
-	}
+	const pool = getRequiredPool();
 
 	await pool.query(
 		`INSERT INTO raw_document_cache (
@@ -623,19 +513,7 @@ export async function persistRawDocumentCache(entry: PersistRawDocumentInput): P
 }
 
 export async function persistQuarantineRows(rows: Array<{ sourceDocumentId: string; reason: string }>): Promise<void> {
-	const pool = getPoolOrNull();
-	const createdAt = new Date().toISOString();
-
-	if (!pool) {
-		for (const row of rows) {
-			fallbackQuarantineRows.push({
-				sourceDocumentId: row.sourceDocumentId,
-				reason: row.reason,
-				createdAt
-			});
-		}
-		return;
-	}
+	const pool = getRequiredPool();
 
 	for (const row of rows) {
 		await pool.query(
@@ -647,10 +525,7 @@ export async function persistQuarantineRows(rows: Array<{ sourceDocumentId: stri
 }
 
 export async function persistParsedFiling(input: PersistParsedFilingInput): Promise<void> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return;
-	}
+	const pool = getRequiredPool();
 
 	const client = await pool.connect();
 	try {
@@ -839,10 +714,7 @@ export async function getFilingProvenance(filingDocumentId: string): Promise<{
 		}>;
 	}>;
 } | null> {
-	const pool = getPoolOrNull();
-	if (!pool) {
-		return null;
-	}
+	const pool = getRequiredPool();
 
 	const filingResult = await pool.query(
 		`SELECT source_system, source_document_id, document_url, compliance_mode

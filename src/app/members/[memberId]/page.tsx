@@ -1,5 +1,7 @@
+import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import Link from "next/link";
 import { getMemberTransactions } from "@/lib/domain/member-service";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
 interface MemberDetailPageProps {
 	params: Promise<{
@@ -9,7 +11,20 @@ interface MemberDetailPageProps {
 
 export default async function MemberDetailPage({ params }: MemberDetailPageProps) {
 	const { memberId } = await params;
-	const transactions = await getMemberTransactions(memberId);
+	let transactions;
+	try {
+		transactions = await getMemberTransactions(memberId);
+	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return (
+				<DatabaseSetupRequired
+					title="Database setup required"
+					description="Member transaction history is unavailable until the database is configured."
+				/>
+			);
+		}
+		throw error;
+	}
 
 	return (
 		<section>

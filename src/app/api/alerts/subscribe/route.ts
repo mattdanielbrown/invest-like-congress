@@ -1,5 +1,6 @@
 import { subscribeAlertEmail, verifyAlertSubscription } from "@/lib/domain/alert-service";
-import { badRequest, internalError, okJson } from "@/lib/api/http";
+import { badRequest, databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { loadServerEnv } from "@/lib/env/server-env";
 
 function isEmailAddress(value: string): boolean {
@@ -31,6 +32,9 @@ export async function POST(request: Request) {
 			verificationUrl
 		});
 	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return databaseSetupRequired();
+		}
 		console.error("subscribe-api-failure", error);
 		return internalError("Failed to create alert subscription.");
 	}
@@ -47,6 +51,9 @@ export async function GET(request: Request) {
 		const verified = await verifyAlertSubscription(token);
 		return okJson({ verified });
 	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return databaseSetupRequired();
+		}
 		console.error("subscribe-verify-api-failure", error);
 		return internalError("Failed to verify subscription token.");
 	}

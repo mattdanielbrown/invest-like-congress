@@ -1,5 +1,6 @@
 import { getFilingProvenance } from "@/lib/db/repository";
-import { internalError, notFound, okJson } from "@/lib/api/http";
+import { databaseSetupRequired, internalError, notFound, okJson } from "@/lib/api/http";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
 interface RouteContext {
 	params: Promise<{
@@ -17,6 +18,9 @@ export async function GET(_request: Request, context: RouteContext) {
 
 		return okJson({ row });
 	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return databaseSetupRequired();
+		}
 		console.error("filing-provenance-api-failure", error);
 		return internalError("Failed to fetch filing provenance.");
 	}

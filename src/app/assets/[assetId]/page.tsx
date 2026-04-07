@@ -1,4 +1,6 @@
+import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import { getAssetActivityById } from "@/lib/domain/asset-service";
+import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
 interface AssetDetailPageProps {
 	params: Promise<{
@@ -8,7 +10,20 @@ interface AssetDetailPageProps {
 
 export default async function AssetDetailPage({ params }: AssetDetailPageProps) {
 	const { assetId } = await params;
-	const row = await getAssetActivityById(assetId);
+	let row;
+	try {
+		row = await getAssetActivityById(assetId);
+	} catch (error) {
+		if (isDatabaseNotConfiguredError(error)) {
+			return (
+				<DatabaseSetupRequired
+					title="Database setup required"
+					description="Asset activity cannot be loaded until a Postgres database is configured."
+				/>
+			);
+		}
+		throw error;
+	}
 	if (!row) {
 		return (
 			<section>
