@@ -1,13 +1,14 @@
 import { getAssetActivityById } from "@/lib/domain/asset-service";
 
 interface AssetDetailPageProps {
-	params: {
+	params: Promise<{
 		assetId: string;
-	};
+	}>;
 }
 
 export default async function AssetDetailPage({ params }: AssetDetailPageProps) {
-	const row = await getAssetActivityById(params.assetId);
+	const { assetId } = await params;
+	const row = await getAssetActivityById(assetId);
 	if (!row) {
 		return (
 			<section>

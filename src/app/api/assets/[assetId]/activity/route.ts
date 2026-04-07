@@ -2,14 +2,15 @@ import { getAssetActivityById } from "@/lib/domain/asset-service";
 import { internalError, notFound, okJson } from "@/lib/api/http";
 
 interface RouteContext {
-	params: {
+	params: Promise<{
 		assetId: string;
-	};
+	}>;
 }
 
 export async function GET(_request: Request, context: RouteContext) {
 	try {
-		const row = await getAssetActivityById(context.params.assetId);
+		const { assetId } = await context.params;
+		const row = await getAssetActivityById(assetId);
 		if (!row) {
 			return notFound("Asset activity not found.");
 		}

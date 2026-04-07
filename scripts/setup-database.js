@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function run() {
 	if (!process.env.DATABASE_URL) {
@@ -7,14 +12,21 @@ async function run() {
 		process.exit(1);
 	}
 
+	const sqlDirectory = path.resolve(__dirname, "../sql");
+	const migrationFileNames = (await fs.readdir(sqlDirectory))
+		.filter((fileName) => /^\d+_.*\.sql$/.test(fileName))
+		.sort((left, right) => left.localeCompare(right));
+
 	const client = new Client({ connectionString: process.env.DATABASE_URL });
 	await client.connect();
 
 	try {
-		const migration001 = await fs.readFile(new URL("../sql/001_initial_schema.sql", import.meta.url), "utf8");
-		const migration002 = await fs.readFile(new URL("../sql/002_indexes.sql", import.meta.url), "utf8");
-		await client.query(migration001);
-		await client.query(migration002);
+		for (const fileName of migrationFileNames) {
+			const filePath = path.join(sqlDirectory, fileName);
+			const sql = await fs.readFile(filePath, "utf8");
+			await client.query(sql);
+			console.info(`Applied ${fileName}`);
+		}
 		console.info("Database schema applied.");
 	} finally {
 		await client.end();

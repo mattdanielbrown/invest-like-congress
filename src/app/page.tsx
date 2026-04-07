@@ -1,18 +1,24 @@
 import { DataTable } from "@/components/data-table";
 import { FilterForm } from "@/components/filter-form";
 import { getMembersWithHoldings } from "@/lib/domain/member-service";
+import type { MemberQueryFilters } from "@/lib/db/schema-types";
 
 interface HomePageProps {
-	searchParams?: Record<string, string | string[] | undefined>;
+	searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {
-	const filters = {
-		chamber: typeof searchParams?.chamber === "string" ? searchParams.chamber : undefined,
-		party: typeof searchParams?.party === "string" ? searchParams.party : undefined,
-		stateCode: typeof searchParams?.stateCode === "string" ? searchParams.stateCode : undefined,
-		sortBy: typeof searchParams?.sortBy === "string" ? searchParams.sortBy : "date",
-		sortDirection: typeof searchParams?.sortDirection === "string" ? searchParams.sortDirection : "desc"
+	const resolvedSearchParams = searchParams ? await searchParams : undefined;
+	const sortByValue = resolvedSearchParams?.sortBy;
+	const sortDirectionValue = resolvedSearchParams?.sortDirection;
+	const filters: MemberQueryFilters = {
+		chamber: typeof resolvedSearchParams?.chamber === "string" ? resolvedSearchParams.chamber : undefined,
+		party: typeof resolvedSearchParams?.party === "string" ? resolvedSearchParams.party : undefined,
+		stateCode: typeof resolvedSearchParams?.stateCode === "string" ? resolvedSearchParams.stateCode : undefined,
+		sortBy: sortByValue === "date" || sortByValue === "shares" || sortByValue === "profit_loss" || sortByValue === "co_holder_count"
+			? sortByValue
+			: "date",
+		sortDirection: sortDirectionValue === "asc" || sortDirectionValue === "desc" ? sortDirectionValue : "desc"
 	};
 
 	const rows = await getMembersWithHoldings(filters);

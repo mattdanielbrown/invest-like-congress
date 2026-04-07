@@ -2,6 +2,7 @@ export type Chamber = "house" | "senate";
 export type TransactionAction = "buy" | "sell";
 export type PositionStatus = "open" | "closed";
 export type VerificationStatus = "verified" | "quarantined";
+export type ExtractionMode = "html" | "pdf-text" | "metadata";
 
 export interface Member {
 	id: string;
@@ -28,6 +29,10 @@ export interface FilingDocument {
 	publishedAt: string | null;
 	verificationStatus: VerificationStatus;
 	ingestionChecksum: string;
+	rawCachePath: string | null;
+	rawFetchedAt: string | null;
+	rawContentHash: string | null;
+	complianceMode: string | null;
 }
 
 export interface SourceAttribution {
@@ -35,12 +40,25 @@ export interface SourceAttribution {
 	entityType: string;
 	entityId: string;
 	fieldName: string;
+	fieldValue: string | null;
 	filingDocumentId: string;
 	sourceText: string;
+	sourceLocation: string | null;
+	extractorVersion: string;
+	confidence: number;
+}
+
+export interface ProvenanceFieldSummary {
+	fieldName: string;
+	fieldValue: string | null;
+	sourceText: string;
+	sourceLocation: string | null;
+	confidence: number;
 }
 
 export interface NormalizedTransaction {
 	id: string;
+	sourceTransactionKey: string;
 	memberId: string;
 	assetId: string;
 	action: TransactionAction;
@@ -53,6 +71,8 @@ export interface NormalizedTransaction {
 	filingDocumentId: string;
 	verificationStatus: VerificationStatus;
 	isNewPosition: boolean;
+	parserConfidence: number;
+	extractionMode: ExtractionMode;
 }
 
 export interface PositionLot {
@@ -82,6 +102,12 @@ export interface TransactionWithPresentation {
 	asset: Asset;
 	realizedProfitLoss: number | null;
 	positionStatusAfterTransaction: PositionStatus;
+	filingSource: {
+		sourceSystem: string;
+		sourceDocumentId: string;
+		documentUrl: string;
+	};
+	provenanceFields: ProvenanceFieldSummary[];
 }
 
 export interface MemberHoldingsRow {
@@ -126,4 +152,27 @@ export interface PositionChangeEvent {
 	realizedProfitLoss: number | null;
 	createdAt: string;
 	sourceTransactionId: string;
+}
+
+export interface ParsedTransactionCandidate {
+	assetDisplayName: string;
+	tickerSymbol: string | null;
+	action: TransactionAction;
+	tradeDate: string;
+	shareQuantity: number | null;
+	pricePerShare: number | null;
+	totalAmountMin: number | null;
+	totalAmountMax: number | null;
+	ownershipType: string | null;
+	comment: string | null;
+	provenanceFields: ProvenanceFieldSummary[];
+	parserConfidence: number;
+	extractionMode: ExtractionMode;
+}
+
+export interface IngestionCheckpoint {
+	sourceSystem: string;
+	cursorKey: string;
+	lastSeenFiledAt: string | null;
+	lastRunAt: string | null;
 }

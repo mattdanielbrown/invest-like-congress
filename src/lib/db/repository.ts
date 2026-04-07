@@ -5,18 +5,21 @@ import type { MemberQueryFilters } from "@/lib/db/schema-types";
 import type {
 	AlertSubscription,
 	AssetActivityRow,
+	IngestionCheckpoint,
 	MemberHoldingsRow,
 	PositionChangeEvent,
 	SubscriptionPreference,
 	TransactionWithPresentation
 } from "@/lib/domain/types";
+import type { OfficialFilingRecord } from "@/lib/ingestion/official-sources";
+import type { ParsedFilingBatch } from "@/lib/ingestion/parser";
 import {
 	sampleAlertSubscriptions,
 	sampleAssetActivityRows,
 	sampleMemberRows,
 	samplePositionChangeEvents,
 	sampleStatus,
-	sampleTransactions
+	sampleTransactionsWithPresentation
 } from "@/lib/source-data/sample-seed";
 
 interface StatusRow {
@@ -26,10 +29,32 @@ interface StatusRow {
 	marketSessionState: string;
 }
 
+interface PersistParsedFilingInput {
+	record: OfficialFilingRecord;
+	parsedRecord: ParsedFilingBatch;
+	rawCachePath: string;
+	rawFetchedAt: string;
+	rawContentHash: string;
+	complianceMode: string;
+}
+
+interface PersistRawDocumentInput {
+	id: string;
+	sourceSystem: string;
+	sourceDocumentId: string;
+	cachePath: string;
+	contentHash: string;
+	fetchedAt: string;
+	contentType: string | null;
+	contentLength: number;
+}
+
 const fallbackSubscriptions = [...sampleAlertSubscriptions];
 const fallbackEvents = [...samplePositionChangeEvents];
+const fallbackIngestionCheckpoints = new Map<string, IngestionCheckpoint>();
+const fallbackQuarantineRows: Array<{ sourceDocumentId: string; reason: string; createdAt: string }> = [];
 
-function useDatabase(): Pool | null {
+function getPoolOrNull(): Pool | null {
 	try {
 		return getDatabasePool();
 	} catch {
@@ -37,8 +62,9 @@ function useDatabase(): Pool | null {
 	}
 }
 
-export async function listMembersWithHoldings(_filters: MemberQueryFilters): Promise<MemberHoldingsRow[]> {
-	const pool = useDatabase();
+export async function listMembersWithHoldings(filters: MemberQueryFilters): Promise<MemberHoldingsRow[]> {
+	void filters;
+	const pool = getPoolOrNull();
 	if (!pool) {
 		return sampleMemberRows;
 	}
@@ -82,27 +108,15 @@ export async function listMembersWithHoldings(_filters: MemberQueryFilters): Pro
 }
 
 export async function listMemberTransactions(memberId: string): Promise<TransactionWithPresentation[]> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
-		return sampleTransactions
-			.filter((transaction) => transaction.memberId === memberId)
-			.map((transaction) => ({
-				transaction,
-				asset: sampleAssetActivityRows.find((row) => row.asset.id === transaction.assetId)?.asset ?? {
-					id: transaction.assetId,
-					displayName: transaction.assetId,
-					tickerSymbol: null,
-					assetType: "unknown",
-					isSymbolResolved: false
-				},
-				realizedProfitLoss: transaction.action === "sell" ? 60 : null,
-				positionStatusAfterTransaction: "open"
-			}));
+		return sampleTransactionsWithPresentation.filter((row) => row.transaction.memberId === memberId);
 	}
 
 	const query = `
 		SELECT
 			t.id,
+			t.source_transaction_key,
 			t.member_id,
 			t.asset_id,
 			t.action,
@@ -115,17 +129,44 @@ export async function listMemberTransactions(memberId: string): Promise<Transact
 			t.filing_document_id,
 			t.verification_status,
 			t.is_new_position,
+			t.parser_confidence,
+			t.extraction_mode,
 			a.display_name,
 			a.ticker_symbol,
 			a.asset_type,
 			a.is_symbol_resolved,
 			rpe.realized_profit_loss,
-			COALESCE(ps.position_status, 'open') AS position_status_after_transaction
+			COALESCE(ps.position_status, 'open') AS position_status_after_transaction,
+			COALESCE(fd.source_system, 'unknown') AS filing_source_system,
+			COALESCE(fd.source_document_id, t.filing_document_id) AS filing_source_document_id,
+			COALESCE(fd.document_url, '') AS filing_document_url,
+			COALESCE(
+				json_agg(
+					json_build_object(
+						'fieldName', sa.field_name,
+						'fieldValue', sa.field_value,
+						'sourceText', sa.source_text,
+						'sourceLocation', sa.source_location,
+						'confidence', sa.confidence
+					)
+				) FILTER (WHERE sa.id IS NOT NULL),
+				'[]'::json
+			) AS provenance_fields
 		FROM normalized_transactions t
 		JOIN assets a ON a.id = t.asset_id
 		LEFT JOIN realized_profit_events rpe ON rpe.source_transaction_id = t.id
 		LEFT JOIN position_state_events ps ON ps.source_transaction_id = t.id
+		LEFT JOIN filing_documents fd ON fd.source_document_id = t.filing_document_id
+		LEFT JOIN source_attributions sa ON sa.entity_id = t.id AND sa.entity_type = 'normalized-transaction'
 		WHERE t.member_id = $1 AND t.verification_status = 'verified'
+		GROUP BY
+			t.id,
+			a.id,
+			rpe.realized_profit_loss,
+			ps.position_status,
+			fd.source_system,
+			fd.source_document_id,
+			fd.document_url
 		ORDER BY t.trade_date DESC
 	`;
 
@@ -133,6 +174,7 @@ export async function listMemberTransactions(memberId: string): Promise<Transact
 	return result.rows.map((row) => ({
 		transaction: {
 			id: row.id,
+			sourceTransactionKey: row.source_transaction_key,
 			memberId: row.member_id,
 			assetId: row.asset_id,
 			action: row.action,
@@ -144,7 +186,9 @@ export async function listMemberTransactions(memberId: string): Promise<Transact
 			totalAmountMax: row.total_amount_max,
 			filingDocumentId: row.filing_document_id,
 			verificationStatus: row.verification_status,
-			isNewPosition: row.is_new_position
+			isNewPosition: row.is_new_position,
+			parserConfidence: Number(row.parser_confidence ?? 0.5),
+			extractionMode: row.extraction_mode ?? "metadata"
 		},
 		asset: {
 			id: row.asset_id,
@@ -154,12 +198,18 @@ export async function listMemberTransactions(memberId: string): Promise<Transact
 			isSymbolResolved: row.is_symbol_resolved
 		},
 		realizedProfitLoss: row.realized_profit_loss,
-		positionStatusAfterTransaction: row.position_status_after_transaction
+		positionStatusAfterTransaction: row.position_status_after_transaction,
+		filingSource: {
+			sourceSystem: row.filing_source_system,
+			sourceDocumentId: row.filing_source_document_id,
+			documentUrl: row.filing_document_url
+		},
+		provenanceFields: Array.isArray(row.provenance_fields) ? row.provenance_fields : []
 	}));
 }
 
 export async function getAssetActivity(assetId: string): Promise<AssetActivityRow | null> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		return sampleAssetActivityRows.find((row) => row.asset.id === assetId) ?? null;
 	}
@@ -185,7 +235,7 @@ export async function getAssetActivity(assetId: string): Promise<AssetActivityRo
 	`;
 
 	const result = await pool.query(query, [assetId]);
-	if (result.rowCount === 0) {
+	if ((result.rowCount ?? 0) === 0) {
 		return null;
 	}
 
@@ -208,7 +258,7 @@ export async function getAssetActivity(assetId: string): Promise<AssetActivityRo
 }
 
 export async function getSystemStatus(): Promise<StatusRow> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		return sampleStatus;
 	}
@@ -224,7 +274,7 @@ export async function getSystemStatus(): Promise<StatusRow> {
 	`;
 
 	const result = await pool.query(query);
-	if (result.rowCount === 0) {
+	if ((result.rowCount ?? 0) === 0) {
 		return {
 			lastIngestionAt: null,
 			lastPricingRefreshAt: null,
@@ -243,7 +293,7 @@ export async function getSystemStatus(): Promise<StatusRow> {
 }
 
 export async function upsertAlertSubscription(emailAddress: string, preference: SubscriptionPreference): Promise<AlertSubscription> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	const verificationToken = randomUUID();
 
 	if (!pool) {
@@ -293,7 +343,7 @@ export async function upsertAlertSubscription(emailAddress: string, preference: 
 }
 
 export async function unsubscribeAlertEmail(emailAddress: string): Promise<boolean> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		const subscription = fallbackSubscriptions.find((item) => item.emailAddress.toLowerCase() === emailAddress.toLowerCase());
 		if (!subscription) {
@@ -309,11 +359,11 @@ export async function unsubscribeAlertEmail(emailAddress: string): Promise<boole
 		WHERE email_address = $1 AND unsubscribed_at IS NULL
 	`;
 	const result = await pool.query(query, [emailAddress]);
-	return result.rowCount > 0;
+	return (result.rowCount ?? 0) > 0;
 }
 
 export async function enqueuePositionChangeEvent(event: Omit<PositionChangeEvent, "id" | "createdAt">): Promise<PositionChangeEvent> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	const row: PositionChangeEvent = {
 		...event,
 		id: randomUUID(),
@@ -354,7 +404,7 @@ export async function enqueuePositionChangeEvent(event: Omit<PositionChangeEvent
 }
 
 export async function listPendingPositionEvents(limit = 100): Promise<PositionChangeEvent[]> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		return fallbackEvents.slice(0, limit);
 	}
@@ -381,7 +431,7 @@ export async function listPendingPositionEvents(limit = 100): Promise<PositionCh
 }
 
 export async function listVerifiedSubscriptions(): Promise<AlertSubscription[]> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		return fallbackSubscriptions.filter((subscription) => subscription.isVerified && subscription.unsubscribedAt === null);
 	}
@@ -404,7 +454,7 @@ export async function listVerifiedSubscriptions(): Promise<AlertSubscription[]> 
 }
 
 export async function markPositionEventProcessed(eventId: string): Promise<void> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		const index = fallbackEvents.findIndex((event) => event.id === eventId);
 		if (index >= 0) {
@@ -417,28 +467,31 @@ export async function markPositionEventProcessed(eventId: string): Promise<void>
 }
 
 export async function listQuarantinedTransactions(limit = 100): Promise<{ id: string; reason: string; createdAt: string }[]> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
-		return [];
+		return fallbackQuarantineRows.slice(0, limit).map((row) => ({
+			id: row.sourceDocumentId,
+			reason: row.reason,
+			createdAt: row.createdAt
+		}));
 	}
 
 	const query = `
-		SELECT id, quarantine_reason, created_at
-		FROM normalized_transactions
-		WHERE verification_status = 'quarantined'
+		SELECT source_document_id, reason, created_at
+		FROM ingestion_quarantine_events
 		ORDER BY created_at DESC
 		LIMIT $1
 	`;
 	const result = await pool.query(query, [limit]);
 	return result.rows.map((row) => ({
-		id: row.id,
-		reason: row.quarantine_reason,
+		id: row.source_document_id,
+		reason: row.reason,
 		createdAt: new Date(row.created_at).toISOString()
 	}));
 }
 
 export async function verifyAlertSubscriptionByToken(token: string): Promise<boolean> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		const subscription = fallbackSubscriptions.find((entry) => entry.verificationToken === token);
 		if (!subscription) {
@@ -454,11 +507,11 @@ export async function verifyAlertSubscriptionByToken(token: string): Promise<boo
 		WHERE verification_token = $1
 	`;
 	const result = await pool.query(query, [token]);
-	return result.rowCount > 0;
+	return (result.rowCount ?? 0) > 0;
 }
 
 export async function updateSystemStatus(status: Partial<StatusRow>): Promise<void> {
-	const pool = useDatabase();
+	const pool = getPoolOrNull();
 	if (!pool) {
 		Object.assign(sampleStatus, status);
 		return;
@@ -480,4 +533,367 @@ export async function updateSystemStatus(status: Partial<StatusRow>): Promise<vo
 		status.nextPricingRefreshAt ?? null,
 		status.marketSessionState ?? null
 	]);
+}
+
+export async function getIngestionCheckpoint(sourceSystem: string, cursorKey: string): Promise<IngestionCheckpoint | null> {
+	const pool = getPoolOrNull();
+	if (!pool) {
+		return fallbackIngestionCheckpoints.get(`${sourceSystem}:${cursorKey}`) ?? null;
+	}
+
+	const result = await pool.query(
+		`SELECT source_system, cursor_key, last_seen_filed_at, last_run_at
+		 FROM ingestion_checkpoints
+		 WHERE source_system = $1 AND cursor_key = $2`,
+		[sourceSystem, cursorKey]
+	);
+
+	if ((result.rowCount ?? 0) === 0) {
+		return null;
+	}
+
+	const row = result.rows[0];
+	return {
+		sourceSystem: row.source_system,
+		cursorKey: row.cursor_key,
+		lastSeenFiledAt: row.last_seen_filed_at ? new Date(row.last_seen_filed_at).toISOString().slice(0, 10) : null,
+		lastRunAt: row.last_run_at ? new Date(row.last_run_at).toISOString() : null
+	};
+}
+
+export async function upsertIngestionCheckpoint(sourceSystem: string, cursorKey: string, lastSeenFiledAt: string | null): Promise<void> {
+	const pool = getPoolOrNull();
+	if (!pool) {
+		fallbackIngestionCheckpoints.set(`${sourceSystem}:${cursorKey}`, {
+			sourceSystem,
+			cursorKey,
+			lastSeenFiledAt,
+			lastRunAt: new Date().toISOString()
+		});
+		return;
+	}
+
+	await pool.query(
+		`INSERT INTO ingestion_checkpoints (source_system, cursor_key, last_seen_filed_at, last_run_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (source_system, cursor_key)
+		 DO UPDATE SET
+			last_seen_filed_at = EXCLUDED.last_seen_filed_at,
+			last_run_at = now()`,
+		[sourceSystem, cursorKey, lastSeenFiledAt]
+	);
+}
+
+export async function persistRawDocumentCache(entry: PersistRawDocumentInput): Promise<void> {
+	const pool = getPoolOrNull();
+	if (!pool) {
+		return;
+	}
+
+	await pool.query(
+		`INSERT INTO raw_document_cache (
+			id,
+			source_system,
+			source_document_id,
+			cache_path,
+			content_hash,
+			fetched_at,
+			content_type,
+			content_length
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (source_document_id)
+		DO UPDATE SET
+			cache_path = EXCLUDED.cache_path,
+			content_hash = EXCLUDED.content_hash,
+			fetched_at = EXCLUDED.fetched_at,
+			content_type = EXCLUDED.content_type,
+			content_length = EXCLUDED.content_length`,
+		[
+			entry.id,
+			entry.sourceSystem,
+			entry.sourceDocumentId,
+			entry.cachePath,
+			entry.contentHash,
+			entry.fetchedAt,
+			entry.contentType,
+			entry.contentLength
+		]
+	);
+}
+
+export async function persistQuarantineRows(rows: Array<{ sourceDocumentId: string; reason: string }>): Promise<void> {
+	const pool = getPoolOrNull();
+	const createdAt = new Date().toISOString();
+
+	if (!pool) {
+		for (const row of rows) {
+			fallbackQuarantineRows.push({
+				sourceDocumentId: row.sourceDocumentId,
+				reason: row.reason,
+				createdAt
+			});
+		}
+		return;
+	}
+
+	for (const row of rows) {
+		await pool.query(
+			`INSERT INTO ingestion_quarantine_events (id, source_document_id, reason, created_at)
+			 VALUES ($1, $2, $3, now())`,
+			[randomUUID(), row.sourceDocumentId, row.reason]
+		);
+	}
+}
+
+export async function persistParsedFiling(input: PersistParsedFilingInput): Promise<void> {
+	const pool = getPoolOrNull();
+	if (!pool) {
+		return;
+	}
+
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+
+		await client.query(
+			`INSERT INTO filing_documents (
+				id,
+				source_system,
+				source_document_id,
+				document_url,
+				filed_at,
+				verification_status,
+				ingestion_checksum,
+				raw_cache_path,
+				raw_fetched_at,
+				raw_content_hash,
+				compliance_mode
+			)
+			VALUES ($1, $2, $3, $4, $5, 'verified', $6, $7, $8, $9, $10)
+			ON CONFLICT (source_document_id)
+			DO UPDATE SET
+				document_url = EXCLUDED.document_url,
+				filed_at = EXCLUDED.filed_at,
+				ingestion_checksum = EXCLUDED.ingestion_checksum,
+				raw_cache_path = EXCLUDED.raw_cache_path,
+				raw_fetched_at = EXCLUDED.raw_fetched_at,
+				raw_content_hash = EXCLUDED.raw_content_hash,
+				compliance_mode = EXCLUDED.compliance_mode`,
+			[
+				input.record.sourceDocumentId,
+				input.record.sourceSystem,
+				input.record.sourceDocumentId,
+				input.record.documentUrl,
+				input.record.filedAt,
+				input.parsedRecord.documentChecksum,
+				input.rawCachePath,
+				input.rawFetchedAt,
+				input.rawContentHash,
+				input.complianceMode
+			]
+		);
+
+		for (const transaction of input.parsedRecord.normalizedTransactions) {
+			await client.query(
+				`INSERT INTO members (id, full_name, party, state_code, chamber)
+				 VALUES ($1, $2, $3, $4, $5)
+				 ON CONFLICT (id) DO NOTHING`,
+				[
+					transaction.memberId,
+					input.record.memberDisplayName,
+					"U",
+					"NA",
+					input.record.chamber
+				]
+			);
+
+			await client.query(
+				`INSERT INTO assets (id, display_name, ticker_symbol, asset_type, is_symbol_resolved)
+				 VALUES ($1, $2, $3, $4, $5)
+				 ON CONFLICT (id) DO NOTHING`,
+				[
+					transaction.assetId,
+					transaction.assetId.replace("asset-", "").replaceAll("-", " "),
+					null,
+					"unknown",
+					false
+				]
+			);
+
+			const upsertedTransaction = await client.query(
+				`INSERT INTO normalized_transactions (
+					id,
+					source_transaction_key,
+					member_id,
+					asset_id,
+					action,
+					trade_date,
+					filing_date,
+					share_quantity,
+					price_per_share,
+					total_amount_min,
+					total_amount_max,
+					filing_document_id,
+					verification_status,
+					is_new_position,
+					parser_confidence,
+					extraction_mode
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'verified', $13, $14, $15)
+				ON CONFLICT (source_transaction_key)
+				DO UPDATE SET
+					trade_date = EXCLUDED.trade_date,
+					filing_date = EXCLUDED.filing_date,
+					share_quantity = EXCLUDED.share_quantity,
+					price_per_share = EXCLUDED.price_per_share,
+					total_amount_min = EXCLUDED.total_amount_min,
+					total_amount_max = EXCLUDED.total_amount_max,
+					parser_confidence = EXCLUDED.parser_confidence,
+					extraction_mode = EXCLUDED.extraction_mode,
+					verification_status = 'verified'
+				RETURNING id`,
+				[
+					transaction.id,
+					transaction.sourceTransactionKey,
+					transaction.memberId,
+					transaction.assetId,
+					transaction.action,
+					transaction.tradeDate,
+					transaction.filingDate,
+					transaction.shareQuantity,
+					transaction.pricePerShare,
+					transaction.totalAmountMin,
+					transaction.totalAmountMax,
+					transaction.filingDocumentId,
+					transaction.isNewPosition,
+					transaction.parserConfidence,
+					transaction.extractionMode
+				]
+			);
+
+			const persistedTransactionId = upsertedTransaction.rows[0].id as string;
+			await client.query(
+				"DELETE FROM source_attributions WHERE entity_type = 'normalized-transaction' AND entity_id = $1",
+				[persistedTransactionId]
+			);
+
+			const attributionRows = input.parsedRecord.sourceAttributions.filter((row) => row.entityId === transaction.id);
+			for (const attribution of attributionRows) {
+				await client.query(
+					`INSERT INTO source_attributions (
+						id,
+						entity_type,
+						entity_id,
+						field_name,
+						field_value,
+						filing_document_id,
+						source_text,
+						source_location,
+						extractor_version,
+						confidence
+					)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+					[
+						attribution.id,
+						attribution.entityType,
+						persistedTransactionId,
+						attribution.fieldName,
+						attribution.fieldValue,
+						attribution.filingDocumentId,
+						attribution.sourceText,
+						attribution.sourceLocation,
+						attribution.extractorVersion,
+						attribution.confidence
+					]
+				);
+			}
+		}
+
+		await client.query("COMMIT");
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
+}
+
+export async function getFilingProvenance(filingDocumentId: string): Promise<{
+	filingDocumentId: string;
+	sourceSystem: string;
+	sourceDocumentId: string;
+	documentUrl: string;
+	complianceMode: string | null;
+	transactions: Array<{
+		transactionId: string;
+		sourceTransactionKey: string;
+		tradeDate: string;
+		action: string;
+		provenanceFields: Array<{
+			fieldName: string;
+			fieldValue: string | null;
+			sourceText: string;
+			sourceLocation: string | null;
+			confidence: number;
+		}>;
+	}>;
+} | null> {
+	const pool = getPoolOrNull();
+	if (!pool) {
+		return null;
+	}
+
+	const filingResult = await pool.query(
+		`SELECT source_system, source_document_id, document_url, compliance_mode
+		 FROM filing_documents
+		 WHERE source_document_id = $1`,
+		[filingDocumentId]
+	);
+
+	if ((filingResult.rowCount ?? 0) === 0) {
+		return null;
+	}
+
+	const transactionResult = await pool.query(
+		`SELECT
+			t.id,
+			t.source_transaction_key,
+			t.trade_date,
+			t.action,
+			COALESCE(
+				json_agg(
+					json_build_object(
+						'fieldName', sa.field_name,
+						'fieldValue', sa.field_value,
+						'sourceText', sa.source_text,
+						'sourceLocation', sa.source_location,
+						'confidence', sa.confidence
+					)
+				) FILTER (WHERE sa.id IS NOT NULL),
+				'[]'::json
+			) AS provenance_fields
+		FROM normalized_transactions t
+		LEFT JOIN source_attributions sa ON sa.entity_id = t.id AND sa.entity_type = 'normalized-transaction'
+		WHERE t.filing_document_id = $1
+		GROUP BY t.id
+		ORDER BY t.trade_date DESC`,
+		[filingDocumentId]
+	);
+
+	const filing = filingResult.rows[0];
+	return {
+		filingDocumentId,
+		sourceSystem: filing.source_system,
+		sourceDocumentId: filing.source_document_id,
+		documentUrl: filing.document_url,
+		complianceMode: filing.compliance_mode,
+		transactions: transactionResult.rows.map((row) => ({
+			transactionId: row.id,
+			sourceTransactionKey: row.source_transaction_key,
+			tradeDate: row.trade_date,
+			action: row.action,
+			provenanceFields: Array.isArray(row.provenance_fields) ? row.provenance_fields : []
+		}))
+	};
 }

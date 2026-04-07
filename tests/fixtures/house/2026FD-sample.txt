@@ -1,0 +1,4 @@
+Prefix	Last	First	Suffix	FilingType	StateDst	Year	FilingDate	DocID
+Hon.	Alford	Mark		P	MO04	2026	3/31/2026	20034201
+Hon.	Allen	Richard W.		P	GA12	2026	1/15/2026	20033751
+	Anderson	Elizabeth		W	AL06	2026	1/20/2026	8036

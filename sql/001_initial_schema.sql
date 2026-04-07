@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS members (
 	id text PRIMARY KEY,
 	full_name text NOT NULL,

@@ -1,0 +1,19 @@
+{
+	"draw": 1,
+	"recordsTotal": 2,
+	"recordsFiltered": 2,
+	"data": [
+		{
+			"filing_uuid": "ABC123",
+			"filer_name": "Jane Senator",
+			"date_received": "03/21/2026",
+			"report_type": "Periodic Transaction Report"
+		},
+		{
+			"filing_uuid": "ZZZ999",
+			"filer_name": "Not Included",
+			"date_received": "03/21/2026",
+			"report_type": "Annual Report"
+		}
+	]
+}

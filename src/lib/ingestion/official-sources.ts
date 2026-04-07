@@ -1,52 +1,74 @@
+import type { Chamber } from "@/lib/domain/types";
+import { fetchHousePeriodicTransactionReports, type HouseFilingReference } from "@/lib/ingestion/connectors/house-connector";
+import { fetchSenatePeriodicTransactionReports, type SenateFilingReference } from "@/lib/ingestion/connectors/senate-connector";
+
 export interface OfficialFilingRecord {
 	sourceSystem: "house-disclosures" | "senate-disclosures";
 	sourceDocumentId: string;
 	documentUrl: string;
 	filedAt: string;
-	memberName: string;
-	assetDisplayName: string;
-	action: "purchase" | "sale";
-	tradeDate: string;
-	shareQuantity: number | null;
-	pricePerShare: number | null;
-	totalAmountMin: number | null;
-	totalAmountMax: number | null;
+	memberDisplayName: string;
+	chamber: Chamber;
+	year: number;
 }
 
-export async function fetchHousePeriodicTransactionReports(): Promise<OfficialFilingRecord[]> {
-	return [
-		{
-			sourceSystem: "house-disclosures",
-			sourceDocumentId: "house-doc-2026-001",
-			documentUrl: "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/10000123.pdf",
-			filedAt: "2026-04-01",
-			memberName: "Nancy Pelosi",
-			assetDisplayName: "Amazon.com, Inc.",
-			action: "purchase",
-			tradeDate: "2026-03-11",
-			shareQuantity: 10,
-			pricePerShare: 178,
-			totalAmountMin: 1780,
-			totalAmountMax: 1780
-		}
-	];
+export interface OfficialSourceFetchResult {
+	records: OfficialFilingRecord[];
+	warnings: string[];
 }
 
-export async function fetchSenatePeriodicTransactionReports(): Promise<OfficialFilingRecord[]> {
-	return [
-		{
-			sourceSystem: "senate-disclosures",
-			sourceDocumentId: "senate-doc-2026-001",
-			documentUrl: "https://efdsearch.senate.gov/search/view/paper/123ABC45-DE67-89FG-HI10-1234567890AB/",
-			filedAt: "2026-03-30",
-			memberName: "Mitt Romney",
-			assetDisplayName: "SPDR S&P 500 ETF Trust",
-			action: "purchase",
-			tradeDate: "2026-03-19",
-			shareQuantity: 15,
-			pricePerShare: 522,
-			totalAmountMin: 7830,
-			totalAmountMax: 7830
-		}
-	];
+function normalizeHouseReference(reference: HouseFilingReference): OfficialFilingRecord {
+	return {
+		sourceSystem: reference.sourceSystem,
+		sourceDocumentId: reference.sourceDocumentId,
+		documentUrl: reference.documentUrl,
+		filedAt: reference.filedAt,
+		memberDisplayName: reference.memberDisplayName,
+		chamber: "house",
+		year: reference.year
+	};
+}
+
+function normalizeSenateReference(reference: SenateFilingReference): OfficialFilingRecord {
+	return {
+		sourceSystem: reference.sourceSystem,
+		sourceDocumentId: reference.sourceDocumentId,
+		documentUrl: reference.documentUrl,
+		filedAt: reference.filedAt,
+		memberDisplayName: reference.memberDisplayName,
+		chamber: "senate",
+		year: reference.year
+	};
+}
+
+export async function fetchOfficialPtrRecords(fromYear: number, toYear: number): Promise<OfficialSourceFetchResult> {
+	const warnings: string[] = [];
+
+	const [houseResult, senateResult] = await Promise.allSettled([
+		fetchHousePeriodicTransactionReports(fromYear, toYear),
+		fetchSenatePeriodicTransactionReports(fromYear, toYear)
+	]);
+
+	const records: OfficialFilingRecord[] = [];
+	if (houseResult.status === "fulfilled") {
+		records.push(...houseResult.value.map(normalizeHouseReference));
+	} else {
+		warnings.push(`house-fetch-failure:${String(houseResult.reason)}`);
+	}
+
+	if (senateResult.status === "fulfilled") {
+		records.push(...senateResult.value.map(normalizeSenateReference));
+	} else {
+		warnings.push(`senate-fetch-failure:${String(senateResult.reason)}`);
+	}
+
+	const uniqueRecords = new Map<string, OfficialFilingRecord>();
+	for (const record of records) {
+		uniqueRecords.set(record.sourceDocumentId, record);
+	}
+
+	return {
+		records: [...uniqueRecords.values()],
+		warnings
+	};
 }

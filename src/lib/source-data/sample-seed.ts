@@ -6,7 +6,9 @@ import type {
 	Member,
 	MemberHoldingsRow,
 	NormalizedTransaction,
-	PositionChangeEvent
+	PositionChangeEvent,
+	ProvenanceFieldSummary,
+	TransactionWithPresentation
 } from "@/lib/domain/types";
 
 const nowIso = new Date().toISOString();
@@ -48,6 +50,7 @@ export const sampleAssets: Asset[] = [
 export const sampleTransactions: NormalizedTransaction[] = [
 	{
 		id: "txn-1",
+		sourceTransactionKey: "sample-txn-key-1",
 		memberId: "member-nancy-pelosi",
 		assetId: "asset-amzn",
 		action: "buy",
@@ -59,10 +62,13 @@ export const sampleTransactions: NormalizedTransaction[] = [
 		totalAmountMax: 1780,
 		filingDocumentId: "doc-house-001",
 		verificationStatus: "verified",
-		isNewPosition: true
+		isNewPosition: true,
+		parserConfidence: 0.9,
+		extractionMode: "pdf-text"
 	},
 	{
 		id: "txn-2",
+		sourceTransactionKey: "sample-txn-key-2",
 		memberId: "member-nancy-pelosi",
 		assetId: "asset-amzn",
 		action: "sell",
@@ -74,10 +80,13 @@ export const sampleTransactions: NormalizedTransaction[] = [
 		totalAmountMax: 950,
 		filingDocumentId: "doc-house-002",
 		verificationStatus: "verified",
-		isNewPosition: false
+		isNewPosition: false,
+		parserConfidence: 0.9,
+		extractionMode: "pdf-text"
 	},
 	{
 		id: "txn-3",
+		sourceTransactionKey: "sample-txn-key-3",
 		memberId: "member-mitt-romney",
 		assetId: "asset-spy",
 		action: "buy",
@@ -89,7 +98,9 @@ export const sampleTransactions: NormalizedTransaction[] = [
 		totalAmountMax: 7830,
 		filingDocumentId: "doc-senate-001",
 		verificationStatus: "verified",
-		isNewPosition: true
+		isNewPosition: true,
+		parserConfidence: 0.82,
+		extractionMode: "html"
 	}
 ];
 
@@ -155,6 +166,42 @@ export const sampleAssetActivityRows: AssetActivityRow[] = [
 		latestActivityAt: "2026-03-19"
 	}
 ];
+
+const sampleProvenanceFields: ProvenanceFieldSummary[] = [
+	{
+		fieldName: "trade_date",
+		fieldValue: "2026-03-11",
+		sourceText: "03/11/2026",
+		sourceLocation: "line:42",
+		confidence: 0.9
+	},
+	{
+		fieldName: "amount_range",
+		fieldValue: "1780-1780",
+		sourceText: "$1,780 - $1,780",
+		sourceLocation: "line:43",
+		confidence: 0.9
+	}
+];
+
+export const sampleTransactionsWithPresentation: TransactionWithPresentation[] = sampleTransactions.map((transaction) => ({
+	transaction,
+	asset: sampleAssets.find((asset) => asset.id === transaction.assetId) ?? {
+		id: transaction.assetId,
+		displayName: transaction.assetId,
+		tickerSymbol: null,
+		assetType: "unknown",
+		isSymbolResolved: false
+	},
+	realizedProfitLoss: transaction.action === "sell" ? 60 : null,
+	positionStatusAfterTransaction: "open",
+	filingSource: {
+		sourceSystem: transaction.filingDocumentId.includes("senate") ? "senate-disclosures" : "house-disclosures",
+		sourceDocumentId: transaction.filingDocumentId,
+		documentUrl: "https://example.gov/document"
+	},
+	provenanceFields: sampleProvenanceFields
+}));
 
 export const sampleAlertSubscriptions: AlertSubscription[] = [];
 export const samplePositionChangeEvents: PositionChangeEvent[] = [];

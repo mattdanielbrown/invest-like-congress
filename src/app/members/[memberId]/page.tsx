@@ -2,19 +2,20 @@ import Link from "next/link";
 import { getMemberTransactions } from "@/lib/domain/member-service";
 
 interface MemberDetailPageProps {
-	params: {
+	params: Promise<{
 		memberId: string;
-	};
+	}>;
 }
 
 export default async function MemberDetailPage({ params }: MemberDetailPageProps) {
-	const transactions = await getMemberTransactions(params.memberId);
+	const { memberId } = await params;
+	const transactions = await getMemberTransactions(memberId);
 
 	return (
 		<section>
 			<h2>Member Transactions</h2>
 			<p>
-				Viewing verified transaction history for <strong>{params.memberId}</strong>.
+				Viewing verified transaction history for <strong>{memberId}</strong>.
 			</p>
 			{transactions.length === 0 ? (
 				<p>No verified transactions found for this member.</p>
