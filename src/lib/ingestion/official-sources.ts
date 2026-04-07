@@ -41,6 +41,16 @@ function normalizeSenateReference(reference: SenateFilingReference): OfficialFil
 	};
 }
 
+export function sortOfficialFilingRecords(records: OfficialFilingRecord[]): OfficialFilingRecord[] {
+	return [...records].sort((left, right) => {
+		const dateOrder = left.filedAt.localeCompare(right.filedAt);
+		if (dateOrder !== 0) {
+			return dateOrder;
+		}
+		return left.sourceDocumentId.localeCompare(right.sourceDocumentId);
+	});
+}
+
 export async function fetchOfficialPtrRecords(fromYear: number, toYear: number): Promise<OfficialSourceFetchResult> {
 	const warnings: string[] = [];
 
@@ -67,8 +77,10 @@ export async function fetchOfficialPtrRecords(fromYear: number, toYear: number):
 		uniqueRecords.set(record.sourceDocumentId, record);
 	}
 
+	const sortedRecords = sortOfficialFilingRecords([...uniqueRecords.values()]);
+
 	return {
-		records: [...uniqueRecords.values()],
+		records: sortedRecords,
 		warnings
 	};
 }

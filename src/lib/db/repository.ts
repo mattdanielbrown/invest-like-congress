@@ -6,6 +6,7 @@ import type {
 	AlertSubscription,
 	AssetActivityRow,
 	IngestionCheckpoint,
+	IngestionRunSummary,
 	MemberHoldingsRow,
 	PositionChangeEvent,
 	SubscriptionPreference,
@@ -20,6 +21,8 @@ interface StatusRow {
 	nextPricingRefreshAt: string | null;
 	marketSessionState: string;
 }
+
+type IngestionMode = "backfill" | "hourly";
 
 interface PersistParsedFilingInput {
 	record: OfficialFilingRecord;
@@ -41,37 +44,149 @@ interface PersistRawDocumentInput {
 	contentLength: number;
 }
 
+interface PersistIngestionRunSummaryInput {
+	runId: string;
+	mode: IngestionMode;
+	sourceSystem: string;
+	cursorKey: string;
+	fromYear: number;
+	toYear: number;
+	startedAt: string;
+	finishedAt: string;
+	success: boolean;
+	failureReason: string | null;
+	fetchedDocuments: number;
+	parsedDocuments: number;
+	quarantinedDocuments: number;
+	extractedTransactions: number;
+	provenanceCoverageRatio: number;
+	warnings: string[];
+}
+
 function getRequiredPool(): Pool {
 	return getDatabasePool();
 }
 
 export async function listMembersWithHoldings(filters: MemberQueryFilters): Promise<MemberHoldingsRow[]> {
-	void filters;
 	const pool = getRequiredPool();
+	const whereClauses: string[] = [];
+	const values: Array<string | number> = [];
+
+	if (filters.chamber) {
+		values.push(filters.chamber);
+		whereClauses.push(`m.chamber = $${values.length}`);
+	}
+	if (filters.party) {
+		values.push(filters.party);
+		whereClauses.push(`m.party = $${values.length}`);
+	}
+	if (filters.stateCode) {
+		values.push(filters.stateCode.toUpperCase());
+		whereClauses.push(`m.state_code = $${values.length}`);
+	}
+
+	const requiresTransactionFilter = Boolean(filters.assetId || filters.dateFrom || filters.dateTo);
+	if (requiresTransactionFilter) {
+		const transactionClauses = ["nt.member_id = m.id", "nt.verification_status = 'verified'"];
+		if (filters.assetId) {
+			values.push(filters.assetId);
+			transactionClauses.push(`nt.asset_id = $${values.length}`);
+		}
+		if (filters.dateFrom) {
+			values.push(filters.dateFrom);
+			transactionClauses.push(`nt.trade_date >= $${values.length}::date`);
+		}
+		if (filters.dateTo) {
+			values.push(filters.dateTo);
+			transactionClauses.push(`nt.trade_date <= $${values.length}::date`);
+		}
+		whereClauses.push(`EXISTS (
+			SELECT 1
+			FROM normalized_transactions nt
+			WHERE ${transactionClauses.join(" AND ")}
+		)`);
+	}
+
+	const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+	const sortDirection = filters.sortDirection === "asc" ? "ASC" : "DESC";
+	const sortBy = filters.sortBy ?? "date";
+	const orderBySql = (() => {
+		if (sortBy === "shares") {
+			return `holdings_count ${sortDirection}, last_verified_update_at DESC`;
+		}
+		if (sortBy === "profit_loss") {
+			return `profit_loss_total ${sortDirection}, last_verified_update_at DESC`;
+		}
+		if (sortBy === "co_holder_count") {
+			return `co_holder_count ${sortDirection}, last_verified_update_at DESC`;
+		}
+		return `last_verified_update_at ${sortDirection}`;
+	})();
+
+	const page = Math.max(1, filters.page ?? 1);
+	const pageSize = Math.min(200, Math.max(1, filters.pageSize ?? 50));
+	const offset = (page - 1) * pageSize;
+	values.push(pageSize, offset);
+	const limitPlaceholder = `$${values.length - 1}`;
+	const offsetPlaceholder = `$${values.length}`;
 
 	const query = `
+		WITH selected_members AS (
+			SELECT m.id, m.full_name, m.party, m.state_code, m.chamber
+			FROM members m
+			${whereSql}
+		),
+		holding_aggregation AS (
+			SELECT
+				h.member_id,
+				COUNT(*) FILTER (WHERE h.status = 'open')::int AS holdings_count,
+				COALESCE(SUM(h.unrealized_profit_loss), 0)::float8 AS unrealized_profit_loss_total,
+				COALESCE(MAX(h.verified_updated_at), now()) AS last_verified_update_at
+			FROM holding_snapshots h
+			WHERE h.verification_status = 'verified'
+			GROUP BY h.member_id
+		),
+		realized_aggregation AS (
+			SELECT
+				rp.member_id,
+				COALESCE(SUM(rp.realized_profit_loss), 0)::float8 AS realized_profit_loss_total
+			FROM realized_profit_events rp
+			GROUP BY rp.member_id
+		),
+		co_holder_aggregation AS (
+			SELECT
+				base.member_id,
+				COALESCE(COUNT(DISTINCT peer.member_id) - 1, 0)::int AS co_holder_count
+			FROM holding_snapshots base
+			JOIN holding_snapshots peer
+				ON peer.asset_id = base.asset_id
+				AND peer.verification_status = 'verified'
+			WHERE base.verification_status = 'verified'
+				AND base.status = 'open'
+			GROUP BY base.member_id
+		)
 		SELECT
-			m.id,
-			m.full_name,
-			m.party,
-			m.state_code,
-			m.chamber,
-			COUNT(h.id)::int AS holdings_count,
-			COALESCE(SUM(h.unrealized_profit_loss), 0)::float8 AS unrealized_profit_loss_total,
-			COALESCE(SUM(rp.realized_profit_loss), 0)::float8 AS realized_profit_loss_total,
-			COALESCE(MAX(h.verified_updated_at), now()) AS last_verified_update_at
-		FROM members m
-		LEFT JOIN holding_snapshots h
-			ON h.member_id = m.id
-			AND h.verification_status = 'verified'
-		LEFT JOIN realized_profit_events rp
-			ON rp.member_id = m.id
-		GROUP BY m.id
-		ORDER BY last_verified_update_at DESC
-		LIMIT 200
+			sm.id,
+			sm.full_name,
+			sm.party,
+			sm.state_code,
+			sm.chamber,
+			COALESCE(ha.holdings_count, 0)::int AS holdings_count,
+			COALESCE(ha.unrealized_profit_loss_total, 0)::float8 AS unrealized_profit_loss_total,
+			COALESCE(ra.realized_profit_loss_total, 0)::float8 AS realized_profit_loss_total,
+			COALESCE(cha.co_holder_count, 0)::int AS co_holder_count,
+			(COALESCE(ha.unrealized_profit_loss_total, 0) + COALESCE(ra.realized_profit_loss_total, 0))::float8 AS profit_loss_total,
+			COALESCE(ha.last_verified_update_at, now()) AS last_verified_update_at
+		FROM selected_members sm
+		LEFT JOIN holding_aggregation ha ON ha.member_id = sm.id
+		LEFT JOIN realized_aggregation ra ON ra.member_id = sm.id
+		LEFT JOIN co_holder_aggregation cha ON cha.member_id = sm.id
+		ORDER BY ${orderBySql}
+		LIMIT ${limitPlaceholder}
+		OFFSET ${offsetPlaceholder}
 	`;
 
-	const result = await pool.query(query);
+	const result = await pool.query(query, values);
 	return result.rows.map((row) => ({
 		member: {
 			id: row.id,
@@ -477,6 +592,125 @@ export async function upsertIngestionCheckpoint(sourceSystem: string, cursorKey:
 	);
 }
 
+export async function persistIngestionRunSummary(input: PersistIngestionRunSummaryInput): Promise<void> {
+	const pool = getRequiredPool();
+
+	await pool.query(
+		`INSERT INTO ingestion_run_summaries (
+			run_id,
+			mode,
+			source_system,
+			cursor_key,
+			from_year,
+			to_year,
+			started_at,
+			finished_at,
+			success,
+			failure_reason,
+			fetched_documents,
+			parsed_documents,
+			quarantined_documents,
+			extracted_transactions,
+			provenance_coverage_ratio,
+			warnings_json
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11, $12,
+			$13, $14, $15, $16::jsonb
+		)
+		ON CONFLICT (run_id)
+		DO UPDATE SET
+			finished_at = EXCLUDED.finished_at,
+			success = EXCLUDED.success,
+			failure_reason = EXCLUDED.failure_reason,
+			fetched_documents = EXCLUDED.fetched_documents,
+			parsed_documents = EXCLUDED.parsed_documents,
+			quarantined_documents = EXCLUDED.quarantined_documents,
+			extracted_transactions = EXCLUDED.extracted_transactions,
+			provenance_coverage_ratio = EXCLUDED.provenance_coverage_ratio,
+			warnings_json = EXCLUDED.warnings_json`,
+		[
+			input.runId,
+			input.mode,
+			input.sourceSystem,
+			input.cursorKey,
+			input.fromYear,
+			input.toYear,
+			input.startedAt,
+			input.finishedAt,
+			input.success,
+			input.failureReason,
+			input.fetchedDocuments,
+			input.parsedDocuments,
+			input.quarantinedDocuments,
+			input.extractedTransactions,
+			input.provenanceCoverageRatio,
+			JSON.stringify(input.warnings)
+		]
+	);
+}
+
+export async function getLatestIngestionRunSummary(): Promise<IngestionRunSummary | null> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT
+			run_id,
+			mode,
+			source_system,
+			cursor_key,
+			from_year,
+			to_year,
+			started_at,
+			finished_at,
+			success,
+			failure_reason,
+			fetched_documents,
+			parsed_documents,
+			quarantined_documents,
+			extracted_transactions,
+			provenance_coverage_ratio,
+			warnings_json
+		FROM ingestion_run_summaries
+		ORDER BY started_at DESC
+		LIMIT 1`
+	);
+
+	if ((result.rowCount ?? 0) === 0) {
+		return null;
+	}
+
+	const row = result.rows[0];
+	return {
+		runId: row.run_id,
+		mode: row.mode,
+		sourceSystem: row.source_system,
+		cursorKey: row.cursor_key,
+		fromYear: Number(row.from_year),
+		toYear: Number(row.to_year),
+		startedAt: new Date(row.started_at).toISOString(),
+		finishedAt: row.finished_at ? new Date(row.finished_at).toISOString() : null,
+		success: Boolean(row.success),
+		failureReason: row.failure_reason ?? null,
+		fetchedDocuments: Number(row.fetched_documents),
+		parsedDocuments: Number(row.parsed_documents),
+		quarantinedDocuments: Number(row.quarantined_documents),
+		extractedTransactions: Number(row.extracted_transactions),
+		provenanceCoverageRatio: Number(row.provenance_coverage_ratio),
+		warnings: Array.isArray(row.warnings_json) ? row.warnings_json : []
+	};
+}
+
+export async function getPendingAlertEventCount(): Promise<number> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT COUNT(*)::int AS pending_count
+		FROM position_change_events
+		WHERE processed_at IS NULL`
+	);
+	return Number(result.rows[0]?.pending_count ?? 0);
+}
+
 export async function persistRawDocumentCache(entry: PersistRawDocumentInput): Promise<void> {
 	const pool = getRequiredPool();
 
@@ -570,6 +804,18 @@ export async function persistParsedFiling(input: PersistParsedFilingInput): Prom
 		);
 
 		for (const transaction of input.parsedRecord.normalizedTransactions) {
+			const parserConfidenceValue = Number.isFinite(transaction.parserConfidence)
+				? Math.min(1, Math.max(0, Number(transaction.parserConfidence)))
+				: 0.5;
+			const extractionModeValue = transaction.extractionMode === "html"
+				|| transaction.extractionMode === "pdf-text"
+				|| transaction.extractionMode === "metadata"
+				? transaction.extractionMode
+				: "metadata";
+			const sourceTransactionKeyValue = transaction.sourceTransactionKey
+				? transaction.sourceTransactionKey
+				: randomUUID();
+
 			await client.query(
 				`INSERT INTO members (id, full_name, party, state_code, chamber)
 				 VALUES ($1, $2, $3, $4, $5)
@@ -630,7 +876,7 @@ export async function persistParsedFiling(input: PersistParsedFilingInput): Prom
 				RETURNING id`,
 				[
 					transaction.id,
-					transaction.sourceTransactionKey,
+					sourceTransactionKeyValue,
 					transaction.memberId,
 					transaction.assetId,
 					transaction.action,
@@ -640,10 +886,10 @@ export async function persistParsedFiling(input: PersistParsedFilingInput): Prom
 					transaction.pricePerShare,
 					transaction.totalAmountMin,
 					transaction.totalAmountMax,
-					transaction.filingDocumentId,
+					input.record.sourceDocumentId,
 					transaction.isNewPosition,
-					transaction.parserConfidence,
-					transaction.extractionMode
+					parserConfidenceValue,
+					extractionModeValue
 				]
 			);
 

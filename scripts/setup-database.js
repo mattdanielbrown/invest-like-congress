@@ -21,14 +21,23 @@ async function run() {
 	await client.connect();
 
 	try {
+		await client.query("SELECT pg_advisory_lock(94741322)");
 		for (const fileName of migrationFileNames) {
 			const filePath = path.join(sqlDirectory, fileName);
 			const sql = await fs.readFile(filePath, "utf8");
-			await client.query(sql);
+			await client.query("BEGIN");
+			try {
+				await client.query(sql);
+				await client.query("COMMIT");
+			} catch (error) {
+				await client.query("ROLLBACK");
+				throw error;
+			}
 			console.info(`Applied ${fileName}`);
 		}
 		console.info("Database schema applied.");
 	} finally {
+		await client.query("SELECT pg_advisory_unlock(94741322)");
 		await client.end();
 	}
 }

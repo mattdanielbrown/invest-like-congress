@@ -25,14 +25,26 @@ function parseCsrfToken(homeHtml: string): string {
 }
 
 function parseSetCookieHeader(response: Response): string {
+	const cookieValues = "getSetCookie" in response.headers
+		? (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? []
+		: [];
+
+	if (cookieValues.length > 0) {
+		return cookieValues
+			.map((cookie) => cookie.split(";")[0]?.trim() ?? "")
+			.filter((cookie) => cookie.includes("="))
+			.join("; ");
+	}
+
 	const rawHeader = response.headers.get("set-cookie") ?? "";
 	if (!rawHeader) {
 		return "";
 	}
 
-	return rawHeader
-		.split(",")
-		.map((piece) => piece.trim().split(";")[0])
+	// Handles comma-delimited cookie strings while preserving Expires attributes.
+	const segments = rawHeader.match(/(?:^|,)\s*[^=;,]+=[^,]*/g) ?? [];
+	return segments
+		.map((segment) => segment.replace(/^,\s*/, "").split(";")[0]?.trim() ?? "")
 		.filter((cookie) => cookie.includes("="))
 		.join("; ");
 }

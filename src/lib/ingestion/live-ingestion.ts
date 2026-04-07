@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { fetchWithRetry, rateLimitPause } from "@/lib/ingestion/http-client";
 import { cacheRawDocument } from "@/lib/ingestion/raw-cache";
 import { parseHousePtrText } from "@/lib/ingestion/parsers/house-ptr-parser";
@@ -11,6 +12,7 @@ import {
 	persistParsedFiling,
 	persistQuarantineRows,
 	persistRawDocumentCache,
+	persistIngestionRunSummary,
 	upsertIngestionCheckpoint,
 	updateSystemStatus
 } from "@/lib/db/repository";
@@ -25,12 +27,18 @@ export interface RunIngestionOptions {
 }
 
 interface IngestionRunSummary {
+	runId: string;
 	fetchedDocuments: number;
 	parsedDocuments: number;
 	quarantinedDocuments: number;
 	extractedTransactions: number;
 	provenanceCoverageRatio: number;
 	warnings: string[];
+	failureReason: string | null;
+	startedAt: string;
+	finishedAt: string;
+	success: boolean;
+	cursorKey: string;
 }
 
 function detectContentType(response: Response, bytes: Uint8Array): "html" | "pdf" | "other" {
@@ -59,18 +67,20 @@ function getCursorKey(options: RunIngestionOptions): string {
 	return `${options.mode}:${options.fromYear}-${options.toYear}`;
 }
 
-function maybeSkipByCheckpoint(recordFiledAt: string, checkpointDate: string | null): boolean {
+export function maybeSkipByCheckpoint(recordFiledAt: string, checkpointDate: string | null): boolean {
 	if (!checkpointDate) {
 		return false;
 	}
 
 	const recordDate = new Date(recordFiledAt);
 	const knownDate = new Date(checkpointDate);
-	return recordDate.getTime() < knownDate.getTime();
+	return recordDate.getTime() <= knownDate.getTime();
 }
 
 export async function runLiveIngestion(options: RunIngestionOptions): Promise<IngestionRunSummary> {
 	const env = loadServerEnv();
+	const runId = randomUUID();
+	const startedAt = new Date().toISOString();
 	const checkpointKey = getCursorKey(options);
 	const checkpoint = await getIngestionCheckpoint("official-ptr", checkpointKey);
 	const sourceResult = await fetchOfficialPtrRecords(options.fromYear, options.toYear);
@@ -83,78 +93,139 @@ export async function runLiveIngestion(options: RunIngestionOptions): Promise<In
 	const warnings = [...sourceResult.warnings];
 	let lastSeenFiledAt: string | null = checkpoint?.lastSeenFiledAt ?? null;
 
-	for (const record of sourceResult.records) {
-		if (options.mode === "hourly" && maybeSkipByCheckpoint(record.filedAt, checkpoint?.lastSeenFiledAt ?? null)) {
-			continue;
+	try {
+		for (const record of sourceResult.records) {
+			if (options.mode === "hourly" && maybeSkipByCheckpoint(record.filedAt, checkpoint?.lastSeenFiledAt ?? null)) {
+				continue;
+			}
+
+			const response = await fetchWithRetry(record.documentUrl, { maxRetries: 2 });
+			const rawBytes = new Uint8Array(await response.arrayBuffer());
+			const contentTypeHeader = response.headers.get("content-type");
+			const detectedType = detectContentType(response, rawBytes);
+			const rawContentHash = createHash("sha256").update(rawBytes).digest("hex");
+			fetchedDocuments += 1;
+
+			console.info("ingestion-document-fetched", {
+				run_id: runId,
+				mode: options.mode,
+				source_system: record.sourceSystem,
+				source_document_id: record.sourceDocumentId,
+				checkpoint_key: checkpointKey
+			});
+
+			const cachedDocument = await cacheRawDocument(record.sourceSystem, record.sourceDocumentId, rawBytes, contentTypeHeader);
+			await persistRawDocumentCache({
+				id: cachedDocument.id,
+				sourceSystem: record.sourceSystem,
+				sourceDocumentId: record.sourceDocumentId,
+				cachePath: cachedDocument.cachePath,
+				contentHash: cachedDocument.contentHash,
+				fetchedAt: cachedDocument.fetchedAt,
+				contentType: cachedDocument.contentType,
+				contentLength: cachedDocument.contentLength
+			});
+
+			const candidates = parseCandidates(detectedType, rawBytes);
+			const parsedRecord = parseOfficialRecord(record, candidates);
+
+			if (parsedRecord.quarantinedRows.length > 0) {
+				quarantinedDocuments += 1;
+				await persistQuarantineRows(parsedRecord.quarantinedRows);
+			}
+
+			if (parsedRecord.normalizedTransactions.length > 0) {
+				parsedDocuments += 1;
+				extractedTransactions += parsedRecord.normalizedTransactions.length;
+				provenanceFieldCount += parsedRecord.sourceAttributions.length;
+				await persistParsedFiling({
+					record,
+					parsedRecord,
+					rawCachePath: cachedDocument.cachePath,
+					rawFetchedAt: cachedDocument.fetchedAt,
+					rawContentHash,
+					complianceMode: env.senateComplianceMode
+				});
+			}
+
+			if (!lastSeenFiledAt || new Date(record.filedAt).getTime() > new Date(lastSeenFiledAt).getTime()) {
+				lastSeenFiledAt = record.filedAt;
+			}
+
+			await rateLimitPause();
 		}
 
-		const response = await fetchWithRetry(record.documentUrl, { maxRetries: 2 });
-		const rawBytes = new Uint8Array(await response.arrayBuffer());
-		const contentTypeHeader = response.headers.get("content-type");
-		const detectedType = detectContentType(response, rawBytes);
-		const rawContentHash = createHash("sha256").update(rawBytes).digest("hex");
-		fetchedDocuments += 1;
+		await upsertIngestionCheckpoint("official-ptr", checkpointKey, lastSeenFiledAt);
+		await updateSystemStatus({ lastIngestionAt: new Date().toISOString() });
 
-		const cachedDocument = await cacheRawDocument(record.sourceSystem, record.sourceDocumentId, rawBytes, contentTypeHeader);
-		await persistRawDocumentCache({
-			id: cachedDocument.id,
-			sourceSystem: record.sourceSystem,
-			sourceDocumentId: record.sourceDocumentId,
-			cachePath: cachedDocument.cachePath,
-			contentHash: cachedDocument.contentHash,
-			fetchedAt: cachedDocument.fetchedAt,
-			contentType: cachedDocument.contentType,
-			contentLength: cachedDocument.contentLength
+		const provenanceCoverageRatio = extractedTransactions > 0
+			? Number((provenanceFieldCount / extractedTransactions).toFixed(4))
+			: 0;
+
+		emitMetric({ name: "ingestion.fetched_documents", value: fetchedDocuments, timestamp: new Date().toISOString() });
+		emitMetric({ name: "ingestion.parsed_documents", value: parsedDocuments, timestamp: new Date().toISOString() });
+		emitMetric({ name: "ingestion.quarantined_documents", value: quarantinedDocuments, timestamp: new Date().toISOString() });
+		emitMetric({ name: "ingestion.extracted_transactions", value: extractedTransactions, timestamp: new Date().toISOString() });
+		emitMetric({ name: "ingestion.provenance_coverage_ratio", value: provenanceCoverageRatio, timestamp: new Date().toISOString() });
+
+		const finishedAt = new Date().toISOString();
+		await persistIngestionRunSummary({
+			runId,
+			mode: options.mode,
+			sourceSystem: "official-ptr",
+			cursorKey: checkpointKey,
+			fromYear: options.fromYear,
+			toYear: options.toYear,
+			startedAt,
+			finishedAt,
+			success: true,
+			failureReason: null,
+			fetchedDocuments,
+			parsedDocuments,
+			quarantinedDocuments,
+			extractedTransactions,
+			provenanceCoverageRatio,
+			warnings
 		});
 
-		const candidates = parseCandidates(detectedType, rawBytes);
-		const parsedRecord = parseOfficialRecord(record, candidates);
-
-		if (parsedRecord.quarantinedRows.length > 0) {
-			quarantinedDocuments += 1;
-			await persistQuarantineRows(parsedRecord.quarantinedRows);
-		}
-
-		if (parsedRecord.normalizedTransactions.length > 0) {
-			parsedDocuments += 1;
-			extractedTransactions += parsedRecord.normalizedTransactions.length;
-			provenanceFieldCount += parsedRecord.sourceAttributions.length;
-			await persistParsedFiling({
-				record,
-				parsedRecord,
-				rawCachePath: cachedDocument.cachePath,
-				rawFetchedAt: cachedDocument.fetchedAt,
-				rawContentHash,
-				complianceMode: env.senateComplianceMode
-			});
-		}
-
-		if (!lastSeenFiledAt || new Date(record.filedAt).getTime() > new Date(lastSeenFiledAt).getTime()) {
-			lastSeenFiledAt = record.filedAt;
-		}
-
-		await rateLimitPause();
+		return {
+			runId,
+			fetchedDocuments,
+			parsedDocuments,
+			quarantinedDocuments,
+			extractedTransactions,
+			provenanceCoverageRatio,
+			warnings,
+			failureReason: null,
+			startedAt,
+			finishedAt,
+			success: true,
+			cursorKey: checkpointKey
+		};
+	} catch (error) {
+		const finishedAt = new Date().toISOString();
+		const failureReason = error instanceof Error ? error.message : String(error);
+		const provenanceCoverageRatio = extractedTransactions > 0
+			? Number((provenanceFieldCount / extractedTransactions).toFixed(4))
+			: 0;
+		await persistIngestionRunSummary({
+			runId,
+			mode: options.mode,
+			sourceSystem: "official-ptr",
+			cursorKey: checkpointKey,
+			fromYear: options.fromYear,
+			toYear: options.toYear,
+			startedAt,
+			finishedAt,
+			success: false,
+			failureReason,
+			fetchedDocuments,
+			parsedDocuments,
+			quarantinedDocuments,
+			extractedTransactions,
+			provenanceCoverageRatio,
+			warnings
+		});
+		throw error;
 	}
-
-	await upsertIngestionCheckpoint("official-ptr", checkpointKey, lastSeenFiledAt);
-	await updateSystemStatus({ lastIngestionAt: new Date().toISOString() });
-
-	const provenanceCoverageRatio = extractedTransactions > 0
-		? Number((provenanceFieldCount / extractedTransactions).toFixed(4))
-		: 0;
-
-	emitMetric({ name: "ingestion.fetched_documents", value: fetchedDocuments, timestamp: new Date().toISOString() });
-	emitMetric({ name: "ingestion.parsed_documents", value: parsedDocuments, timestamp: new Date().toISOString() });
-	emitMetric({ name: "ingestion.quarantined_documents", value: quarantinedDocuments, timestamp: new Date().toISOString() });
-	emitMetric({ name: "ingestion.extracted_transactions", value: extractedTransactions, timestamp: new Date().toISOString() });
-	emitMetric({ name: "ingestion.provenance_coverage_ratio", value: provenanceCoverageRatio, timestamp: new Date().toISOString() });
-
-	return {
-		fetchedDocuments,
-		parsedDocuments,
-		quarantinedDocuments,
-		extractedTransactions,
-		provenanceCoverageRatio,
-		warnings
-	};
 }

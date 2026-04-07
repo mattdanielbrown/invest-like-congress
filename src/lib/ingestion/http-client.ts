@@ -16,8 +16,8 @@ function sleep(delayMs: number): Promise<void> {
 
 export async function fetchWithRetry(url: string, options: FetchWithRetryOptions = {}): Promise<Response> {
 	const env = loadServerEnv();
-	const maxRetries = options.maxRetries ?? 3;
-	const retryDelayMs = options.retryDelayMs ?? 800;
+	const maxRetries = options.maxRetries ?? env.ingestionRetryMaxRetries;
+	const retryDelayMs = options.retryDelayMs ?? env.ingestionRetryDelayMs;
 
 	for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
 		try {
@@ -43,12 +43,14 @@ export async function fetchWithRetry(url: string, options: FetchWithRetryOptions
 			}
 		}
 
-		await sleep(retryDelayMs * (attempt + 1));
+		const jitterMs = Math.floor(Math.random() * 100);
+		await sleep(retryDelayMs * (attempt + 1) + jitterMs);
 	}
 
 	throw new Error(`Failed to fetch ${url} after retries.`);
 }
 
 export async function rateLimitPause(): Promise<void> {
-	await sleep(300);
+	const env = loadServerEnv();
+	await sleep(env.ingestionRateLimitPauseMs);
 }

@@ -176,3 +176,22 @@ export interface IngestionCheckpoint {
 	lastSeenFiledAt: string | null;
 	lastRunAt: string | null;
 }
+
+export interface IngestionRunSummary {
+	runId: string;
+	mode: "backfill" | "hourly";
+	sourceSystem: string;
+	cursorKey: string;
+	fromYear: number;
+	toYear: number;
+	startedAt: string;
+	finishedAt: string | null;
+	success: boolean;
+	failureReason: string | null;
+	fetchedDocuments: number;
+	parsedDocuments: number;
+	quarantinedDocuments: number;
+	extractedTransactions: number;
+	provenanceCoverageRatio: number;
+	warnings: string[];
+}

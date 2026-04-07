@@ -37,6 +37,11 @@ Verified congressional portfolio tracking with a public website and supporting i
 	- `docker compose up -d`
 3. Configure environment:
 	- `cp .env.example .env`
+	- Review worker and ingestion tuning vars:
+		- `INGESTION_RETRY_MAX_RETRIES`
+		- `INGESTION_RETRY_DELAY_MS`
+		- `INGESTION_RATE_LIMIT_PAUSE_MS`
+		- `WORKER_ALLOW_DRY_RUN` (set to `0` in production)
 4. Apply schema:
 	- `npm run db:setup`
 5. Start web app:
@@ -76,6 +81,11 @@ Verified congressional portfolio tracking with a public website and supporting i
 5. Start incremental hourly polling
 	- `npm run worker:ingestion -- --mode=hourly --from-year=2019 --to-year=2026`
 
+## Worker behavior
+
+- Workers now fail fast when `DATABASE_URL` is missing unless `WORKER_ALLOW_DRY_RUN=1`.
+- Worker scripts are thin entrypoints over shared service modules in `scripts/lib/`.
+
 ## Troubleshooting
 
 - Empty UI with setup-required message:
@@ -83,3 +93,15 @@ Verified congressional portfolio tracking with a public website and supporting i
 - Empty UI with no setup-required message:
 	- DB is connected but ingest may not have run yet.
 	- Run smoke ingestion and recheck counts in the runbook.
+- Ingestion appears stale:
+	- Check `GET /api/system/status` for `healthSignals.minutesSinceLastIngestion`.
+	- Query latest run summary:
+		- `psql "$DATABASE_URL" -c "select run_id,mode,started_at,finished_at,success,failure_reason,warnings_json from ingestion_run_summaries order by started_at desc limit 5;"`
+- Need to replay hourly window:
+	- Remove only the relevant checkpoint key, then rerun ingestion:
+		- `psql "$DATABASE_URL" -c "delete from ingestion_checkpoints where source_system='official-ptr' and cursor_key='hourly:2019-2026';"`
+		- `npm run worker:ingestion -- --mode=hourly --from-year=2019 --to-year=2026`
+- Need to inspect quarantined rows:
+	- `psql "$DATABASE_URL" -c "select source_document_id,reason,created_at from ingestion_quarantine_events order by created_at desc limit 50;"`
+- Switching Senate mode temporarily:
+	- Set `SENATE_COMPLIANCE_MODE=manual` to disable automated Senate fetches.
