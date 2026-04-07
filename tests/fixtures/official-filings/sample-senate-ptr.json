@@ -1,0 +1,14 @@
+{
+	"sourceSystem": "senate-disclosures",
+	"sourceDocumentId": "senate-doc-2026-001",
+	"documentUrl": "https://efdsearch.senate.gov/search/view/paper/123ABC45-DE67-89FG-HI10-1234567890AB/",
+	"filedAt": "2026-03-30",
+	"memberName": "Mitt Romney",
+	"assetDisplayName": "SPDR S&P 500 ETF Trust",
+	"action": "purchase",
+	"tradeDate": "2026-03-19",
+	"shareQuantity": 15,
+	"pricePerShare": 522,
+	"totalAmountMin": 7830,
+	"totalAmountMax": 7830
+}

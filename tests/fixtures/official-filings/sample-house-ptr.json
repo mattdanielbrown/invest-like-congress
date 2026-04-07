@@ -1,0 +1,14 @@
+{
+	"sourceSystem": "house-disclosures",
+	"sourceDocumentId": "house-doc-2026-001",
+	"documentUrl": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/10000123.pdf",
+	"filedAt": "2026-04-01",
+	"memberName": "Nancy Pelosi",
+	"assetDisplayName": "Amazon.com, Inc.",
+	"action": "purchase",
+	"tradeDate": "2026-03-11",
+	"shareQuantity": 10,
+	"pricePerShare": 178,
+	"totalAmountMin": 1780,
+	"totalAmountMax": 1780
+}
