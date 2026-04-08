@@ -1,17 +1,39 @@
-import { getLatestIngestionRunSummary, getPendingAlertEventCount, getSystemStatus } from "@/lib/db/repository";
+import {
+	getLatestIngestionRunSummary,
+	getLatestSuccessfulWorkerRunSummary,
+	getLatestWorkerRunSummary,
+	getPendingAlertEventCount,
+	getSystemStatus
+} from "@/lib/db/repository";
 import { databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { getIntradayRefreshHoursUtc } from "@/lib/scheduling/intraday-schedule";
 
 export async function GET() {
 	try {
-		const [status, pendingAlertEventCount, latestIngestionRun] = await Promise.all([
+		const [
+			status,
+			pendingAlertEventCount,
+			latestIngestionRun,
+			latestPricingRefreshRun,
+			latestAlertWorkerRun,
+			latestSuccessfulAlertWorkerRun
+		] = await Promise.all([
 			getSystemStatus(),
 			getPendingAlertEventCount(),
-			getLatestIngestionRunSummary()
+			getLatestIngestionRunSummary(),
+			getLatestWorkerRunSummary("pricing-refresh"),
+			getLatestWorkerRunSummary("alerts"),
+			getLatestSuccessfulWorkerRunSummary("alerts")
 		]);
 		const minutesSinceLastIngestion = status.lastIngestionAt
 			? Math.floor((Date.now() - new Date(status.lastIngestionAt).getTime()) / (60 * 1000))
+			: null;
+		const minutesSinceLastPricingRefresh = status.lastPricingRefreshAt
+			? Math.floor((Date.now() - new Date(status.lastPricingRefreshAt).getTime()) / (60 * 1000))
+			: null;
+		const minutesSinceLastSuccessfulAlertDispatch = latestSuccessfulAlertWorkerRun
+			? Math.floor((Date.now() - new Date(latestSuccessfulAlertWorkerRun.finishedAt).getTime()) / (60 * 1000))
 			: null;
 		return okJson({
 			status,
@@ -19,9 +41,13 @@ export async function GET() {
 			targetRefreshRunsPerTradingDay: 3,
 			healthSignals: {
 				pendingAlertEventCount,
-				minutesSinceLastIngestion
+				minutesSinceLastIngestion,
+				minutesSinceLastPricingRefresh,
+				minutesSinceLastSuccessfulAlertDispatch
 			},
-			latestIngestionRun
+			latestIngestionRun,
+			latestPricingRefreshRun,
+			latestAlertWorkerRun
 		});
 	} catch (error) {
 		if (isDatabaseNotConfiguredError(error)) {

@@ -7,7 +7,7 @@ interface PositionChangeEmailInput {
 	idempotencyKey: string;
 }
 
-export async function sendPositionChangeEmail(input: PositionChangeEmailInput): Promise<void> {
+export async function sendPositionChangeEmail(input: PositionChangeEmailInput): Promise<{ deliveryMode: "dry-run" | "provider" }> {
 	const env = loadServerEnv();
 
 	const subject = `Congress Portfolio Alert: ${input.event.action}`;
@@ -28,14 +28,8 @@ export async function sendPositionChangeEmail(input: PositionChangeEmailInput): 
 			body,
 			idempotencyKey: input.idempotencyKey
 		});
-		return;
+		return { deliveryMode: "dry-run" };
 	}
 
-	console.info("[alert-email:provider-not-implemented]", {
-		to: input.emailAddress,
-		from: env.emailFromAddress,
-		subject,
-		body,
-		idempotencyKey: input.idempotencyKey
-	});
+	throw new Error("EMAIL_PROVIDER_API_KEY is configured but provider-backed alert delivery is not implemented.");
 }

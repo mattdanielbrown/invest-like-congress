@@ -1,9 +1,9 @@
 import { loadEnvironmentFile } from "./lib/load-environment.js";
-import { runPricingRefreshWorker } from "./lib/run-pricing-refresh-service.js";
+import { runPricingRefreshWorkerFromCli } from "@/lib/workers/run-pricing-refresh-worker.ts";
 
 loadEnvironmentFile();
 
-runPricingRefreshWorker().catch((error) => {
+runPricingRefreshWorkerFromCli().catch((error) => {
 	console.error("Pricing refresh failed", error);
 	process.exit(1);
 });

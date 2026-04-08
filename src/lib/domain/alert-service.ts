@@ -1,15 +1,14 @@
 import {
-	listPendingPositionEvents,
 	listVerifiedSubscriptions,
-	markPositionEventProcessed,
 	upsertAlertSubscription,
 	unsubscribeAlertEmail,
 	verifyAlertSubscriptionByToken
 } from "@/lib/db/repository";
 import type { PositionChangeEvent, SubscriptionPreference } from "@/lib/domain/types";
 import { sendPositionChangeEmail } from "@/lib/notifications/email-sender";
+import { processClaimedAlertEvents } from "@/lib/workers/process-alert-events.js";
 
-function isEventInPreference(event: PositionChangeEvent, preference: SubscriptionPreference): boolean {
+export function isEventInPreference(event: PositionChangeEvent, preference: SubscriptionPreference): boolean {
 	const matchesMember = preference.memberIds.length === 0 || preference.memberIds.includes(event.memberId);
 	const matchesAsset = preference.assetIds.length === 0 || preference.assetIds.includes(event.assetId);
 	return matchesMember && matchesAsset;
@@ -27,29 +26,29 @@ export async function verifyAlertSubscription(token: string) {
 	return verifyAlertSubscriptionByToken(token);
 }
 
-export async function deliverPendingAlertEvents(): Promise<number> {
+interface DeliverPendingAlertEventsDependencies {
+	runId: string;
+	claimPendingPositionEvents: (limit: number) => Promise<PositionChangeEvent[]>;
+	listVerifiedSubscriptions: typeof listVerifiedSubscriptions;
+	markPositionEventProcessed: (eventId: string) => Promise<void>;
+	markPositionEventDeliveryFailed: (eventId: string, failureReason: string) => Promise<void>;
+	isEventInPreference?: typeof isEventInPreference;
+	sendPositionChangeEmail?: typeof sendPositionChangeEmail;
+}
+
+export async function deliverPendingAlertEvents(dependencies: DeliverPendingAlertEventsDependencies) {
 	const [events, subscriptions] = await Promise.all([
-		listPendingPositionEvents(250),
-		listVerifiedSubscriptions()
+		dependencies.claimPendingPositionEvents(250),
+		dependencies.listVerifiedSubscriptions()
 	]);
 
-	let deliveredCount = 0;
-	for (const event of events) {
-		for (const subscription of subscriptions) {
-			if (!isEventInPreference(event, subscription.preference)) {
-				continue;
-			}
-
-			await sendPositionChangeEmail({
-				emailAddress: subscription.emailAddress,
-				event,
-				idempotencyKey: `${event.id}:${subscription.id}`
-			});
-			deliveredCount += 1;
-		}
-
-		await markPositionEventProcessed(event.id);
-	}
-
-	return deliveredCount;
+	return processClaimedAlertEvents({
+		runId: dependencies.runId,
+		events,
+		subscriptions,
+		isEventInPreference: dependencies.isEventInPreference ?? isEventInPreference,
+		sendDelivery: dependencies.sendPositionChangeEmail ?? sendPositionChangeEmail,
+		markProcessed: dependencies.markPositionEventProcessed,
+		markFailed: dependencies.markPositionEventDeliveryFailed
+	});
 }

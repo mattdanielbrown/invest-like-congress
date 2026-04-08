@@ -170,6 +170,10 @@ export interface PositionChangeEvent {
 	realizedProfitLoss: number | null;
 	createdAt: string;
 	sourceTransactionId: string;
+	processingStartedAt?: string | null;
+	processingRunId?: string | null;
+	deliveryAttemptCount?: number;
+	lastDeliveryError?: string | null;
 }
 
 export interface ParsedTransactionCandidate {
@@ -212,5 +216,18 @@ export interface IngestionRunSummary {
 	quarantinedDocuments: number;
 	extractedTransactions: number;
 	provenanceCoverageRatio: number;
+	warnings: string[];
+}
+
+export type WorkerName = "pricing-refresh" | "alerts";
+
+export interface WorkerRunSummary {
+	runId: string;
+	workerName: WorkerName;
+	startedAt: string;
+	finishedAt: string;
+	success: boolean;
+	failureReason: string | null;
+	metrics: Record<string, unknown>;
 	warnings: string[];
 }

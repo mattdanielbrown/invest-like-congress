@@ -12,7 +12,9 @@ import type {
 	NormalizedTransaction,
 	PositionChangeEvent,
 	SubscriptionPreference,
-	TransactionWithPresentation
+	TransactionWithPresentation,
+	WorkerName,
+	WorkerRunSummary
 } from "@/lib/domain/types";
 import type {
 	DerivedHoldingSnapshotInput,
@@ -72,10 +74,26 @@ interface PersistIngestionRunSummaryInput {
 	warnings: string[];
 }
 
+interface PersistWorkerRunSummaryInput {
+	runId: string;
+	workerName: WorkerName;
+	startedAt: string;
+	finishedAt: string;
+	success: boolean;
+	failureReason: string | null;
+	metrics: Record<string, unknown>;
+	warnings: string[];
+}
+
 interface ExistingHoldingSnapshotPriceRow {
 	memberId: string;
 	assetId: string;
 	lastMarketPrice: number | null;
+}
+
+interface PricingCandidateRow {
+	assetId: string;
+	tickerSymbol: string;
 }
 
 function getRequiredPool(): Pool {
@@ -581,7 +599,19 @@ export async function listPendingPositionEvents(limit = 100): Promise<PositionCh
 	const pool = getRequiredPool();
 
 	const query = `
-		SELECT id, member_id, asset_id, action, share_delta, realized_profit_loss, source_transaction_id, created_at
+		SELECT
+			id,
+			member_id,
+			asset_id,
+			action,
+			share_delta,
+			realized_profit_loss,
+			source_transaction_id,
+			created_at,
+			processing_started_at,
+			processing_run_id,
+			delivery_attempt_count,
+			last_delivery_error
 		FROM position_change_events
 		WHERE processed_at IS NULL
 		ORDER BY created_at ASC
@@ -597,8 +627,77 @@ export async function listPendingPositionEvents(limit = 100): Promise<PositionCh
 		shareDelta: Number(row.share_delta),
 		realizedProfitLoss: row.realized_profit_loss,
 		sourceTransactionId: row.source_transaction_id,
-		createdAt: new Date(row.created_at).toISOString()
+		createdAt: new Date(row.created_at).toISOString(),
+		processingStartedAt: row.processing_started_at ? new Date(row.processing_started_at).toISOString() : null,
+		processingRunId: row.processing_run_id ?? null,
+		deliveryAttemptCount: Number(row.delivery_attempt_count ?? 0),
+		lastDeliveryError: row.last_delivery_error ?? null
 	}));
+}
+
+export async function claimPendingPositionEvents(limit: number, runId: string): Promise<PositionChangeEvent[]> {
+	const pool = getRequiredPool();
+	const client = await pool.connect();
+
+	try {
+		await client.query("BEGIN");
+		const result = await client.query(
+			`WITH claimable_events AS (
+				SELECT id
+				FROM position_change_events
+				WHERE processed_at IS NULL
+					AND (
+						processing_started_at IS NULL
+						OR processing_started_at < now() - interval '15 minutes'
+					)
+				ORDER BY created_at ASC
+				LIMIT $1
+				FOR UPDATE SKIP LOCKED
+			)
+			UPDATE position_change_events AS events
+			SET
+				processing_started_at = now(),
+				processing_run_id = $2,
+				last_delivery_error = NULL
+			FROM claimable_events
+			WHERE events.id = claimable_events.id
+			RETURNING
+				events.id,
+				events.member_id,
+				events.asset_id,
+				events.action,
+				events.share_delta,
+				events.realized_profit_loss,
+				events.source_transaction_id,
+				events.created_at,
+				events.processing_started_at,
+				events.processing_run_id,
+				events.delivery_attempt_count,
+				events.last_delivery_error`,
+			[limit, runId]
+		);
+		await client.query("COMMIT");
+
+		return result.rows.map((row) => ({
+			id: row.id,
+			memberId: row.member_id,
+			assetId: row.asset_id,
+			action: row.action,
+			shareDelta: Number(row.share_delta),
+			realizedProfitLoss: row.realized_profit_loss === null ? null : Number(row.realized_profit_loss),
+			sourceTransactionId: row.source_transaction_id,
+			createdAt: new Date(row.created_at).toISOString(),
+			processingStartedAt: row.processing_started_at ? new Date(row.processing_started_at).toISOString() : null,
+			processingRunId: row.processing_run_id ?? null,
+			deliveryAttemptCount: Number(row.delivery_attempt_count ?? 0),
+			lastDeliveryError: row.last_delivery_error ?? null
+		}));
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
 }
 
 export async function listVerifiedSubscriptions(): Promise<AlertSubscription[]> {
@@ -621,10 +720,36 @@ export async function listVerifiedSubscriptions(): Promise<AlertSubscription[]> 
 	}));
 }
 
-export async function markPositionEventProcessed(eventId: string): Promise<void> {
+export async function markPositionEventProcessed(eventId: string, runId: string): Promise<void> {
 	const pool = getRequiredPool();
 
-	await pool.query("UPDATE position_change_events SET processed_at = now() WHERE id = $1", [eventId]);
+	await pool.query(
+		`UPDATE position_change_events
+		SET
+			processed_at = now(),
+			processing_started_at = NULL,
+			processing_run_id = NULL,
+			last_delivery_error = NULL
+		WHERE id = $1
+			AND processing_run_id = $2`,
+		[eventId, runId]
+	);
+}
+
+export async function markPositionEventDeliveryFailed(eventId: string, runId: string, failureReason: string): Promise<void> {
+	const pool = getRequiredPool();
+
+	await pool.query(
+		`UPDATE position_change_events
+		SET
+			processing_started_at = NULL,
+			processing_run_id = NULL,
+			delivery_attempt_count = delivery_attempt_count + 1,
+			last_delivery_error = $3
+		WHERE id = $1
+			AND processing_run_id = $2`,
+		[eventId, runId, failureReason]
+	);
 }
 
 export async function listQuarantinedTransactions(limit = 100): Promise<{ id: string; reason: string; createdAt: string }[]> {
@@ -773,6 +898,41 @@ export async function persistIngestionRunSummary(input: PersistIngestionRunSumma
 	);
 }
 
+export async function persistWorkerRunSummary(input: PersistWorkerRunSummaryInput): Promise<void> {
+	const pool = getRequiredPool();
+
+	await pool.query(
+		`INSERT INTO worker_run_summaries (
+			run_id,
+			worker_name,
+			started_at,
+			finished_at,
+			success,
+			failure_reason,
+			metrics_json,
+			warnings_json
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
+		ON CONFLICT (run_id)
+		DO UPDATE SET
+			finished_at = EXCLUDED.finished_at,
+			success = EXCLUDED.success,
+			failure_reason = EXCLUDED.failure_reason,
+			metrics_json = EXCLUDED.metrics_json,
+			warnings_json = EXCLUDED.warnings_json`,
+		[
+			input.runId,
+			input.workerName,
+			input.startedAt,
+			input.finishedAt,
+			input.success,
+			input.failureReason,
+			JSON.stringify(input.metrics),
+			JSON.stringify(input.warnings)
+		]
+	);
+}
+
 export async function getLatestIngestionRunSummary(): Promise<IngestionRunSummary | null> {
 	const pool = getRequiredPool();
 	const result = await pool.query(
@@ -823,6 +983,72 @@ export async function getLatestIngestionRunSummary(): Promise<IngestionRunSummar
 	};
 }
 
+function mapWorkerRunSummary(row: Record<string, unknown>): WorkerRunSummary {
+	return {
+		runId: String(row.run_id),
+		workerName: row.worker_name as WorkerName,
+		startedAt: new Date(String(row.started_at)).toISOString(),
+		finishedAt: new Date(String(row.finished_at)).toISOString(),
+		success: Boolean(row.success),
+		failureReason: row.failure_reason ? String(row.failure_reason) : null,
+		metrics: typeof row.metrics_json === "object" && row.metrics_json !== null ? row.metrics_json as Record<string, unknown> : {},
+		warnings: Array.isArray(row.warnings_json) ? row.warnings_json as string[] : []
+	};
+}
+
+export async function getLatestWorkerRunSummary(workerName: WorkerName): Promise<WorkerRunSummary | null> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT
+			run_id,
+			worker_name,
+			started_at,
+			finished_at,
+			success,
+			failure_reason,
+			metrics_json,
+			warnings_json
+		FROM worker_run_summaries
+		WHERE worker_name = $1
+		ORDER BY started_at DESC
+		LIMIT 1`,
+		[workerName]
+	);
+
+	if ((result.rowCount ?? 0) === 0) {
+		return null;
+	}
+
+	return mapWorkerRunSummary(result.rows[0]);
+}
+
+export async function getLatestSuccessfulWorkerRunSummary(workerName: WorkerName): Promise<WorkerRunSummary | null> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT
+			run_id,
+			worker_name,
+			started_at,
+			finished_at,
+			success,
+			failure_reason,
+			metrics_json,
+			warnings_json
+		FROM worker_run_summaries
+		WHERE worker_name = $1
+			AND success = true
+		ORDER BY started_at DESC
+		LIMIT 1`,
+		[workerName]
+	);
+
+	if ((result.rowCount ?? 0) === 0) {
+		return null;
+	}
+
+	return mapWorkerRunSummary(result.rows[0]);
+}
+
 export async function getPendingAlertEventCount(): Promise<number> {
 	const pool = getRequiredPool();
 	const result = await pool.query(
@@ -831,6 +1057,41 @@ export async function getPendingAlertEventCount(): Promise<number> {
 		WHERE processed_at IS NULL`
 	);
 	return Number(result.rows[0]?.pending_count ?? 0);
+}
+
+export async function listVerifiedOpenHoldingTickers(): Promise<PricingCandidateRow[]> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT DISTINCT a.id AS asset_id, a.ticker_symbol
+		FROM assets a
+		JOIN holding_snapshots h ON h.asset_id = a.id
+		WHERE a.ticker_symbol IS NOT NULL
+			AND a.ticker_symbol <> ''
+			AND h.verification_status = 'verified'
+			AND h.status = 'open'`
+	);
+
+	return result.rows.map((row) => ({
+		assetId: row.asset_id,
+		tickerSymbol: String(row.ticker_symbol)
+	}));
+}
+
+export async function updateHoldingSnapshotMarketPrice(assetId: string, marketPrice: number): Promise<void> {
+	const pool = getRequiredPool();
+	await pool.query(
+		`UPDATE holding_snapshots
+		SET
+			last_market_price = $1,
+			unrealized_profit_loss = CASE
+				WHEN shares_held > 0 THEN shares_held * ($1 - average_cost_basis_per_share)
+				ELSE 0
+			END,
+			verified_updated_at = now()
+		WHERE asset_id = $2
+			AND verification_status = 'verified'`,
+		[marketPrice, assetId]
+	);
 }
 
 export async function listVerifiedTransactionsForDerivedState(): Promise<NormalizedTransaction[]> {
