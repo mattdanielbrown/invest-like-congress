@@ -1,7 +1,8 @@
-import { Pool } from "pg";
+import pg from "pg";
 import { DatabaseNotConfiguredError } from "@/lib/db/errors";
 import { loadServerEnv } from "@/lib/env/server-env";
 
+const { Pool } = pg;
 let sharedPool: Pool | null = null;
 
 export function getDatabasePool(): Pool {

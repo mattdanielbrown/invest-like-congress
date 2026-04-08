@@ -9,10 +9,18 @@ import type {
 	IngestionRunSummary,
 	MemberHoldingsRow,
 	MemberPortfolioSummary,
+	NormalizedTransaction,
 	PositionChangeEvent,
 	SubscriptionPreference,
 	TransactionWithPresentation
 } from "@/lib/domain/types";
+import type {
+	DerivedHoldingSnapshotInput,
+	DerivedPortfolioState,
+	DerivedPositionChangeEventInput,
+	DerivedPositionStateEventInput,
+	DerivedRealizedProfitEventInput
+} from "@/lib/ingestion/derived-portfolio-state";
 import type { OfficialFilingRecord } from "@/lib/ingestion/official-sources";
 import type { ParsedFilingBatch } from "@/lib/ingestion/parser";
 
@@ -62,6 +70,12 @@ interface PersistIngestionRunSummaryInput {
 	extractedTransactions: number;
 	provenanceCoverageRatio: number;
 	warnings: string[];
+}
+
+interface ExistingHoldingSnapshotPriceRow {
+	memberId: string;
+	assetId: string;
+	lastMarketPrice: number | null;
 }
 
 function getRequiredPool(): Pool {
@@ -817,6 +831,296 @@ export async function getPendingAlertEventCount(): Promise<number> {
 		WHERE processed_at IS NULL`
 	);
 	return Number(result.rows[0]?.pending_count ?? 0);
+}
+
+export async function listVerifiedTransactionsForDerivedState(): Promise<NormalizedTransaction[]> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT
+			id,
+			source_transaction_key,
+			member_id,
+			asset_id,
+			action,
+			trade_date,
+			filing_date,
+			share_quantity,
+			price_per_share,
+			total_amount_min,
+			total_amount_max,
+			filing_document_id,
+			verification_status,
+			is_new_position,
+			parser_confidence,
+			extraction_mode
+		FROM normalized_transactions
+		WHERE verification_status = 'verified'
+		ORDER BY member_id ASC, asset_id ASC, trade_date ASC, id ASC`
+	);
+
+	return result.rows.map((row) => ({
+		id: row.id,
+		sourceTransactionKey: row.source_transaction_key,
+		memberId: row.member_id,
+		assetId: row.asset_id,
+		action: row.action,
+		tradeDate: row.trade_date,
+		filingDate: row.filing_date,
+		shareQuantity: row.share_quantity === null ? null : Number(row.share_quantity),
+		pricePerShare: row.price_per_share === null ? null : Number(row.price_per_share),
+		totalAmountMin: row.total_amount_min === null ? null : Number(row.total_amount_min),
+		totalAmountMax: row.total_amount_max === null ? null : Number(row.total_amount_max),
+		filingDocumentId: row.filing_document_id,
+		verificationStatus: row.verification_status,
+		isNewPosition: Boolean(row.is_new_position),
+		parserConfidence: Number(row.parser_confidence ?? 0.5),
+		extractionMode: row.extraction_mode
+	}));
+}
+
+async function listExistingHoldingSnapshotPrices(client: Pool | Awaited<ReturnType<Pool["connect"]>>): Promise<ExistingHoldingSnapshotPriceRow[]> {
+	const result = await client.query(
+		`SELECT member_id, asset_id, last_market_price
+		FROM holding_snapshots
+		WHERE verification_status = 'verified'`
+	);
+
+	return result.rows.map((row) => ({
+		memberId: row.member_id,
+		assetId: row.asset_id,
+		lastMarketPrice: row.last_market_price === null ? null : Number(row.last_market_price)
+	}));
+}
+
+function buildHoldingPairKey(memberId: string, assetId: string): string {
+	return `${memberId}:${assetId}`;
+}
+
+function computeUnrealizedProfitLoss(
+	holdingSnapshot: DerivedHoldingSnapshotInput,
+	lastMarketPrice: number | null
+): number | null {
+	if (lastMarketPrice === null || holdingSnapshot.sharesHeld <= 0) {
+		return null;
+	}
+
+	return holdingSnapshot.sharesHeld * (lastMarketPrice - holdingSnapshot.averageCostBasisPerShare);
+}
+
+async function deleteStaleHoldingSnapshots(
+	client: Awaited<ReturnType<Pool["connect"]>>,
+	holdingSnapshots: DerivedHoldingSnapshotInput[]
+): Promise<void> {
+	if (holdingSnapshots.length === 0) {
+		await client.query("DELETE FROM holding_snapshots WHERE verification_status = 'verified'");
+		return;
+	}
+
+	const memberIds = holdingSnapshots.map((row) => row.memberId);
+	const assetIds = holdingSnapshots.map((row) => row.assetId);
+	await client.query(
+		`DELETE FROM holding_snapshots
+		WHERE verification_status = 'verified'
+			AND NOT EXISTS (
+				SELECT 1
+				FROM UNNEST($1::text[], $2::text[]) AS keep_rows(member_id, asset_id)
+				WHERE keep_rows.member_id = holding_snapshots.member_id
+					AND keep_rows.asset_id = holding_snapshots.asset_id
+			)`,
+		[memberIds, assetIds]
+	);
+}
+
+async function deleteStaleTransactionScopedRows(
+	client: Awaited<ReturnType<Pool["connect"]>>,
+	tableName: "realized_profit_events" | "position_state_events" | "position_change_events",
+	sourceTransactionIds: string[]
+): Promise<void> {
+	if (sourceTransactionIds.length === 0) {
+		await client.query(`DELETE FROM ${tableName}`);
+		return;
+	}
+
+	await client.query(
+		`DELETE FROM ${tableName}
+		WHERE source_transaction_id <> ALL($1::text[])`,
+		[sourceTransactionIds]
+	);
+}
+
+async function upsertHoldingSnapshots(
+	client: Awaited<ReturnType<Pool["connect"]>>,
+	holdingSnapshots: DerivedHoldingSnapshotInput[]
+): Promise<void> {
+	const existingPriceRows = await listExistingHoldingSnapshotPrices(client);
+	const priceByHoldingPair = new Map<string, number | null>();
+	for (const row of existingPriceRows) {
+		priceByHoldingPair.set(buildHoldingPairKey(row.memberId, row.assetId), row.lastMarketPrice);
+	}
+
+	for (const holdingSnapshot of holdingSnapshots) {
+		const lastMarketPrice = priceByHoldingPair.get(buildHoldingPairKey(holdingSnapshot.memberId, holdingSnapshot.assetId)) ?? null;
+		await client.query(
+			`INSERT INTO holding_snapshots (
+				id,
+				member_id,
+				asset_id,
+				shares_held,
+				average_cost_basis_per_share,
+				last_market_price,
+				unrealized_profit_loss,
+				status,
+				verification_status,
+				verified_updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+			ON CONFLICT (member_id, asset_id)
+			DO UPDATE SET
+				shares_held = EXCLUDED.shares_held,
+				average_cost_basis_per_share = EXCLUDED.average_cost_basis_per_share,
+				last_market_price = EXCLUDED.last_market_price,
+				unrealized_profit_loss = EXCLUDED.unrealized_profit_loss,
+				status = EXCLUDED.status,
+				verification_status = EXCLUDED.verification_status,
+				verified_updated_at = EXCLUDED.verified_updated_at`,
+			[
+				randomUUID(),
+				holdingSnapshot.memberId,
+				holdingSnapshot.assetId,
+				holdingSnapshot.sharesHeld,
+				holdingSnapshot.averageCostBasisPerShare,
+				lastMarketPrice,
+				computeUnrealizedProfitLoss(holdingSnapshot, lastMarketPrice),
+				holdingSnapshot.status,
+				holdingSnapshot.verificationStatus
+			]
+		);
+	}
+}
+
+async function upsertRealizedProfitEvents(
+	client: Awaited<ReturnType<Pool["connect"]>>,
+	events: DerivedRealizedProfitEventInput[]
+): Promise<void> {
+	for (const event of events) {
+		await client.query(
+			`INSERT INTO realized_profit_events (
+				id,
+				member_id,
+				asset_id,
+				source_transaction_id,
+				realized_profit_loss
+			)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (source_transaction_id)
+			DO UPDATE SET
+				member_id = EXCLUDED.member_id,
+				asset_id = EXCLUDED.asset_id,
+				realized_profit_loss = EXCLUDED.realized_profit_loss`,
+			[
+				randomUUID(),
+				event.memberId,
+				event.assetId,
+				event.sourceTransactionId,
+				event.realizedProfitLoss
+			]
+		);
+	}
+}
+
+async function upsertPositionStateEvents(
+	client: Awaited<ReturnType<Pool["connect"]>>,
+	events: DerivedPositionStateEventInput[]
+): Promise<void> {
+	for (const event of events) {
+		await client.query(
+			`INSERT INTO position_state_events (
+				id,
+				source_transaction_id,
+				position_status
+			)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (source_transaction_id)
+			DO UPDATE SET
+				position_status = EXCLUDED.position_status`,
+			[
+				randomUUID(),
+				event.sourceTransactionId,
+				event.positionStatus
+			]
+		);
+	}
+}
+
+async function upsertPositionChangeEvents(
+	client: Awaited<ReturnType<Pool["connect"]>>,
+	events: DerivedPositionChangeEventInput[]
+): Promise<void> {
+	for (const event of events) {
+		await client.query(
+			`INSERT INTO position_change_events (
+				id,
+				member_id,
+				asset_id,
+				action,
+				share_delta,
+				realized_profit_loss,
+				source_transaction_id
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (source_transaction_id)
+			DO UPDATE SET
+				member_id = EXCLUDED.member_id,
+				asset_id = EXCLUDED.asset_id,
+				action = EXCLUDED.action,
+				share_delta = EXCLUDED.share_delta,
+				realized_profit_loss = EXCLUDED.realized_profit_loss`,
+			[
+				randomUUID(),
+				event.memberId,
+				event.assetId,
+				event.action,
+				event.shareDelta,
+				event.realizedProfitLoss,
+				event.sourceTransactionId
+			]
+		);
+	}
+}
+
+export async function replaceDerivedPortfolioState(derivedState: DerivedPortfolioState): Promise<void> {
+	const pool = getRequiredPool();
+	const client = await pool.connect();
+
+	try {
+		await client.query("BEGIN");
+		await deleteStaleHoldingSnapshots(client, derivedState.holdingSnapshots);
+		await deleteStaleTransactionScopedRows(
+			client,
+			"realized_profit_events",
+			derivedState.realizedProfitEvents.map((event) => event.sourceTransactionId)
+		);
+		await deleteStaleTransactionScopedRows(
+			client,
+			"position_state_events",
+			derivedState.positionStateEvents.map((event) => event.sourceTransactionId)
+		);
+		await deleteStaleTransactionScopedRows(
+			client,
+			"position_change_events",
+			derivedState.positionChangeEvents.map((event) => event.sourceTransactionId)
+		);
+		await upsertHoldingSnapshots(client, derivedState.holdingSnapshots);
+		await upsertRealizedProfitEvents(client, derivedState.realizedProfitEvents);
+		await upsertPositionStateEvents(client, derivedState.positionStateEvents);
+		await upsertPositionChangeEvents(client, derivedState.positionChangeEvents);
+		await client.query("COMMIT");
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
 }
 
 export async function persistRawDocumentCache(entry: PersistRawDocumentInput): Promise<void> {

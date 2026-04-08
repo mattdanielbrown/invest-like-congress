@@ -8,6 +8,7 @@ import { parseSenatePtrHtml } from "@/lib/ingestion/parsers/senate-ptr-parser";
 import { extractTextFromPdfBytes } from "@/lib/ingestion/parsers/pdf-text";
 import { fetchOfficialPtrRecords } from "@/lib/ingestion/official-sources";
 import { parseOfficialRecord } from "@/lib/ingestion/parser";
+import { refreshDerivedPortfolioState } from "@/lib/ingestion/refresh-derived-portfolio-state";
 import {
 	getIngestionCheckpoint,
 	persistParsedFiling,
@@ -146,6 +147,7 @@ export async function runLiveIngestion(options: RunIngestionOptions): Promise<In
 			await rateLimitPause();
 		}
 
+		const derivedStateSummary = await refreshDerivedPortfolioState();
 		await upsertIngestionCheckpoint("official-ptr", checkpointKey, lastSeenFiledAt);
 		await updateSystemStatus({ lastIngestionAt: new Date().toISOString() });
 
@@ -158,6 +160,8 @@ export async function runLiveIngestion(options: RunIngestionOptions): Promise<In
 		emitMetric({ name: "ingestion.quarantined_documents", value: quarantinedDocuments, timestamp: new Date().toISOString() });
 		emitMetric({ name: "ingestion.extracted_transactions", value: extractedTransactions, timestamp: new Date().toISOString() });
 		emitMetric({ name: "ingestion.provenance_coverage_ratio", value: provenanceCoverageRatio, timestamp: new Date().toISOString() });
+		emitMetric({ name: "ingestion.derived_holding_snapshots", value: derivedStateSummary.holdingSnapshots, timestamp: new Date().toISOString() });
+		emitMetric({ name: "ingestion.derived_position_change_events", value: derivedStateSummary.positionChangeEvents, timestamp: new Date().toISOString() });
 
 		const finishedAt = new Date().toISOString();
 		await persistIngestionRunSummary({

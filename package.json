@@ -9,7 +9,7 @@
 		"start": "next start",
 		"lint": "next lint",
 		"db:setup": "node scripts/setup-database.js",
-		"worker:ingestion": "node scripts/run-ingestion.js",
+		"worker:ingestion": "node --experimental-strip-types --import ./scripts/lib/register-alias-loader.mjs scripts/run-ingestion.js",
 		"worker:pricing-refresh": "node scripts/run-pricing-refresh.js",
 		"worker:alerts": "node scripts/run-alert-worker.js",
 		"demo:seed": "node scripts/run-demo-seed.js",

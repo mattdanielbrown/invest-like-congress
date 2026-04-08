@@ -36,10 +36,15 @@ function toYearBounds() {
 
 async function run() {
 	const { fromYear, toYear } = toYearBounds();
+	const ingestionRuntimeArgs = [
+		"--experimental-strip-types",
+		"--import",
+		"./scripts/lib/register-alias-loader.mjs"
+	];
 	console.info("[demo-refresh] starting", { fromYear, toYear });
 
 	await runCommand("node", ["scripts/setup-database.js"]);
-	await runCommand("node", ["scripts/run-ingestion.js", `--mode=backfill`, `--from-year=${fromYear}`, `--to-year=${toYear}`]);
+	await runCommand("node", [...ingestionRuntimeArgs, "scripts/run-ingestion.js", `--mode=backfill`, `--from-year=${fromYear}`, `--to-year=${toYear}`]);
 	await runCommand("node", ["scripts/run-demo-seed.js"]);
 	await runCommand("node", ["scripts/run-pricing-refresh.js"]);
 
