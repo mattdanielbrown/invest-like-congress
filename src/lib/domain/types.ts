@@ -186,6 +186,7 @@ export interface ParsedTransactionCandidate {
 	provenanceFields: ProvenanceFieldSummary[];
 	parserConfidence: number;
 	extractionMode: ExtractionMode;
+	parseIssue?: string | null;
 }
 
 export interface IngestionCheckpoint {

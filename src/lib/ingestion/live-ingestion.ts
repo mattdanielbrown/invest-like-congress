@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { maybeSkipByCheckpoint } from "@/lib/ingestion/checkpoint-utils";
 import { fetchWithRetry, rateLimitPause } from "@/lib/ingestion/http-client";
 import { cacheRawDocument } from "@/lib/ingestion/raw-cache";
 import { parseHousePtrText } from "@/lib/ingestion/parsers/house-ptr-parser";
@@ -65,16 +66,6 @@ function parseCandidates(contentType: "html" | "pdf" | "other", rawBytes: Uint8A
 
 function getCursorKey(options: RunIngestionOptions): string {
 	return `${options.mode}:${options.fromYear}-${options.toYear}`;
-}
-
-export function maybeSkipByCheckpoint(recordFiledAt: string, checkpointDate: string | null): boolean {
-	if (!checkpointDate) {
-		return false;
-	}
-
-	const recordDate = new Date(recordFiledAt);
-	const knownDate = new Date(checkpointDate);
-	return recordDate.getTime() <= knownDate.getTime();
 }
 
 export async function runLiveIngestion(options: RunIngestionOptions): Promise<IngestionRunSummary> {

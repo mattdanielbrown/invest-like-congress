@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { NormalizedTransaction, ParsedTransactionCandidate, SourceAttribution } from "@/lib/domain/types";
-import type { OfficialFilingRecord } from "@/lib/ingestion/official-sources";
+import type { NormalizedTransaction, ParsedTransactionCandidate, SourceAttribution } from "../domain/types";
+import type { OfficialFilingRecord } from "./official-sources";
+import { hasRequiredTransactionProvenance, normalizeTradeDate } from "./parsers/parser-normalization.ts";
 
 export interface ParsedFilingBatch {
 	documentChecksum: string;
@@ -44,6 +45,30 @@ function toSourceAttributions(transactionId: string, filingDocumentId: string, p
 	}));
 }
 
+function getCandidateFailureReason(candidate: ParsedTransactionCandidate): string | null {
+	if (candidate.parseIssue) {
+		return candidate.parseIssue;
+	}
+
+	if (!candidate.assetDisplayName || !candidate.tradeDate || candidate.totalAmountMin === null || candidate.totalAmountMax === null) {
+		return "missing-required-fields";
+	}
+
+	if (normalizeTradeDate(candidate.tradeDate) !== candidate.tradeDate) {
+		return "invalid-trade-date";
+	}
+
+	if (candidate.totalAmountMin < 0 || candidate.totalAmountMax < 0 || candidate.totalAmountMax < candidate.totalAmountMin) {
+		return "invalid-amount-range";
+	}
+
+	if (!hasRequiredTransactionProvenance(candidate.provenanceFields.map((field) => field.fieldName))) {
+		return "ambiguous-transaction-row";
+	}
+
+	return null;
+}
+
 export function parseOfficialRecord(record: OfficialFilingRecord, candidates: ParsedTransactionCandidate[]): ParsedFilingBatch {
 	const documentChecksum = createHash("sha256")
 		.update(JSON.stringify({
@@ -65,10 +90,11 @@ export function parseOfficialRecord(record: OfficialFilingRecord, candidates: Pa
 	}
 
 	for (const [index, candidate] of candidates.entries()) {
-		if (!candidate.assetDisplayName || !candidate.tradeDate || candidate.totalAmountMin === null) {
+		const failureReason = getCandidateFailureReason(candidate);
+		if (failureReason) {
 			quarantinedRows.push({
 				sourceDocumentId: record.sourceDocumentId,
-				reason: "missing-required-fields"
+				reason: failureReason
 			});
 			continue;
 		}

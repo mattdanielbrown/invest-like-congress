@@ -32,6 +32,27 @@ test("parser generates transaction records with provenance fields", () => {
 						sourceText: "Example Corp (EXM)",
 						sourceLocation: "line:1",
 						confidence: 0.8
+					},
+					{
+						fieldName: "action",
+						fieldValue: "buy",
+						sourceText: "Purchase",
+						sourceLocation: "line:2",
+						confidence: 0.8
+					},
+					{
+						fieldName: "trade_date",
+						fieldValue: "2026-03-11",
+						sourceText: "03/11/2026",
+						sourceLocation: "line:3",
+						confidence: 0.8
+					},
+					{
+						fieldName: "amount_range",
+						fieldValue: "$1000-$1500",
+						sourceText: "$1,000 - $1,500",
+						sourceLocation: "line:4",
+						confidence: 0.8
 					}
 				],
 				parserConfidence: 0.8,
@@ -41,7 +62,7 @@ test("parser generates transaction records with provenance fields", () => {
 	);
 
 	assert.equal(result.normalizedTransactions.length, 1);
-	assert.equal(result.sourceAttributions.length, 1);
+	assert.equal(result.sourceAttributions.length, 4);
 	assert.equal(result.quarantinedRows.length, 0);
 	assert.equal(result.sourceAttributions[0].fieldName, "asset_name");
 });

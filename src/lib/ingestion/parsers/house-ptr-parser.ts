@@ -1,22 +1,12 @@
-import type { ParsedTransactionCandidate, ProvenanceFieldSummary } from "@/lib/domain/types";
-
-function parseAmountRange(rawText: string): { min: number | null; max: number | null } {
-	const rangeMatch = rawText.match(/\$?([\d,]+)\s*-\s*\$?([\d,]+)/);
-	if (rangeMatch) {
-		return {
-			min: Number(rangeMatch[1].replaceAll(",", "")),
-			max: Number(rangeMatch[2].replaceAll(",", ""))
-		};
-	}
-
-	const singleMatch = rawText.match(/\$\s?([\d,]+)/);
-	if (singleMatch) {
-		const amount = Number(singleMatch[1].replaceAll(",", ""));
-		return { min: amount, max: amount };
-	}
-
-	return { min: null, max: null };
-}
+import type { ParsedTransactionCandidate, ProvenanceFieldSummary } from "../../domain/types";
+import {
+	cleanAssetDisplayName,
+	extractTickerSymbol,
+	normalizeAction,
+	normalizeTradeDate,
+	normalizeWhitespace,
+	parseAmountRange
+} from "./parser-normalization.ts";
 
 function buildProvenanceField(fieldName: string, fieldValue: string | null, sourceText: string, sourceLocation: string): ProvenanceFieldSummary {
 	return {
@@ -28,47 +18,80 @@ function buildProvenanceField(fieldName: string, fieldValue: string | null, sour
 	};
 }
 
+function isBoilerplateLine(line: string): boolean {
+	return /^(periodic transaction report|asset|description|issuer|ticker|owner|page \d+ of \d+|notes?:|filing status|transaction type)$/i.test(line);
+}
+
+function isLikelyAssetLine(line: string): boolean {
+	if (!line || isBoilerplateLine(line)) {
+		return false;
+	}
+
+	if (normalizeAction(line)) {
+		return false;
+	}
+
+	if (normalizeTradeDate(line)) {
+		return false;
+	}
+
+	const amount = parseAmountRange(line, { allowSingleValue: true });
+	if (amount.min !== null && amount.max !== null) {
+		return false;
+	}
+
+	return !/^owner:/i.test(line) && !/^pending review$/i.test(line);
+}
+
+function findNearestAssetLine(lines: string[], actionIndex: number): { text: string; index: number } | null {
+	for (let index = actionIndex - 1; index >= Math.max(0, actionIndex - 4); index -= 1) {
+		if (isLikelyAssetLine(lines[index])) {
+			return {
+				text: lines[index],
+				index
+			};
+		}
+	}
+
+	return null;
+}
+
 function parseCandidatesFromLines(lines: string[]): ParsedTransactionCandidate[] {
 	const candidates: ParsedTransactionCandidate[] = [];
 
 	for (let index = 0; index < lines.length; index += 1) {
 		const line = lines[index];
-		const actionMatch = line.match(/\b(Purchase|Sale)\b/i);
-		if (!actionMatch) {
+		const action = normalizeAction(line);
+		if (!action) {
 			continue;
 		}
 
-		const action = actionMatch[1].toLowerCase() === "purchase" ? "buy" : "sell";
-		const amountText = [line, lines[index + 1] ?? ""].join(" ");
-		const { min, max } = parseAmountRange(amountText);
-		const dateMatch = amountText.match(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/);
-		const assetLine = lines[index - 1] ?? line;
-		const tickerMatch = assetLine.match(/\(([A-Z]{1,5})\)/);
-		const tradeDateRaw = dateMatch ? dateMatch[1] : "";
-		const tradeDateParts = tradeDateRaw.split(/[\/\-]/);
-		const normalizedDate = tradeDateParts.length === 3
-			? `${tradeDateParts[2].length === 2 ? `20${tradeDateParts[2]}` : tradeDateParts[2]}-${tradeDateParts[0].padStart(2, "0")}-${tradeDateParts[1].padStart(2, "0")}`
-			: "";
-
-		if (!normalizedDate || min === null) {
-			continue;
-		}
-
-		const assetDisplayName = assetLine.replaceAll(/\([^)]*\)/g, "").trim();
+		const assetLine = findNearestAssetLine(lines, index);
+		const detailLines = lines.slice(index, index + 4);
+		const detailText = detailLines.join(" ");
+		const dateMatch = detailText.match(/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/);
+		const normalizedDate = dateMatch ? normalizeTradeDate(dateMatch[0]) ?? "" : "";
+		const { min, max } = parseAmountRange(
+			detailLines.find((detailLine) => parseAmountRange(detailLine, { allowSingleValue: true }).min !== null) ?? "",
+			{ allowSingleValue: true }
+		);
+		const assetSourceText = assetLine?.text ?? "";
+		const assetDisplayName = cleanAssetDisplayName(assetSourceText);
+		const tickerSymbol = assetSourceText ? extractTickerSymbol(assetSourceText) : null;
 		const provenanceFields: ProvenanceFieldSummary[] = [
-			buildProvenanceField("asset_name", assetDisplayName, assetLine, `line:${index}`),
+			buildProvenanceField("asset_name", assetDisplayName || null, assetSourceText, `line:${assetLine?.index ?? index}`),
 			buildProvenanceField("action", action, line, `line:${index + 1}`),
-			buildProvenanceField("trade_date", normalizedDate, amountText, `line:${index + 1}`),
-			buildProvenanceField("amount_range", min === max ? `$${min}` : `$${min}-$${max}`, amountText, `line:${index + 1}`)
+			buildProvenanceField("trade_date", normalizedDate || null, detailText, `line:${index + 1}`),
+			buildProvenanceField("amount_range", min !== null && max !== null ? (min === max ? `$${min}` : `$${min}-$${max}`) : null, detailText, `line:${index + 1}`)
 		];
 
-		if (tickerMatch) {
-			provenanceFields.push(buildProvenanceField("ticker", tickerMatch[1], assetLine, `line:${index}`));
+		if (tickerSymbol) {
+			provenanceFields.push(buildProvenanceField("ticker", tickerSymbol, assetSourceText, `line:${assetLine?.index ?? index}`));
 		}
 
 		candidates.push({
 			assetDisplayName,
-			tickerSymbol: tickerMatch?.[1] ?? null,
+			tickerSymbol,
 			action,
 			tradeDate: normalizedDate,
 			shareQuantity: null,
@@ -79,7 +102,10 @@ function parseCandidatesFromLines(lines: string[]): ParsedTransactionCandidate[]
 			comment: null,
 			provenanceFields,
 			parserConfidence: 0.72,
-			extractionMode: "pdf-text"
+			extractionMode: "pdf-text",
+			parseIssue: assetDisplayName
+				? (!normalizedDate ? "invalid-trade-date" : min === null || max === null ? "invalid-amount-range" : null)
+				: "ambiguous-transaction-row"
 		});
 	}
 
@@ -89,8 +115,8 @@ function parseCandidatesFromLines(lines: string[]): ParsedTransactionCandidate[]
 export function parseHousePtrText(rawText: string): ParsedTransactionCandidate[] {
 	const lines = rawText
 		.split(/\r?\n/)
-		.map((line) => line.replaceAll(/\s+/g, " ").trim())
-		.filter((line) => line.length > 0);
+		.map((line) => normalizeWhitespace(line))
+		.filter((line) => line.length > 0 && !isBoilerplateLine(line));
 
 	return parseCandidatesFromLines(lines);
 }

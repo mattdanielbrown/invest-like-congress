@@ -1,6 +1,7 @@
 import type { Chamber } from "@/lib/domain/types";
 import { fetchHousePeriodicTransactionReports, type HouseFilingReference } from "@/lib/ingestion/connectors/house-connector";
 import { fetchSenatePeriodicTransactionReports, type SenateFilingReference } from "@/lib/ingestion/connectors/senate-connector";
+import { sortOfficialFilingRecords } from "@/lib/ingestion/official-source-sorting";
 
 export interface OfficialFilingRecord {
 	sourceSystem: "house-disclosures" | "senate-disclosures";
@@ -39,16 +40,6 @@ function normalizeSenateReference(reference: SenateFilingReference): OfficialFil
 		chamber: "senate",
 		year: reference.year
 	};
-}
-
-export function sortOfficialFilingRecords(records: OfficialFilingRecord[]): OfficialFilingRecord[] {
-	return [...records].sort((left, right) => {
-		const dateOrder = left.filedAt.localeCompare(right.filedAt);
-		if (dateOrder !== 0) {
-			return dateOrder;
-		}
-		return left.sourceDocumentId.localeCompare(right.sourceDocumentId);
-	});
 }
 
 export async function fetchOfficialPtrRecords(fromYear: number, toYear: number): Promise<OfficialSourceFetchResult> {
