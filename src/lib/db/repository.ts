@@ -8,6 +8,7 @@ import type {
 	IngestionCheckpoint,
 	IngestionRunSummary,
 	MemberHoldingsRow,
+	MemberPortfolioSummary,
 	PositionChangeEvent,
 	SubscriptionPreference,
 	TransactionWithPresentation
@@ -343,6 +344,113 @@ export async function getAssetActivity(assetId: string): Promise<AssetActivityRo
 		openPositionCount: Number(row.open_position_count),
 		closedPositionCount: Number(row.closed_position_count),
 		latestActivityAt: row.latest_activity_at ? new Date(row.latest_activity_at).toISOString() : null
+	};
+}
+
+export async function listAssetsWithActivity(limit = 200): Promise<AssetActivityRow[]> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT
+			a.id,
+			a.display_name,
+			a.ticker_symbol,
+			a.asset_type,
+			a.is_symbol_resolved,
+			COUNT(DISTINCT hs.member_id)::int AS holder_count,
+			COUNT(DISTINCT CASE WHEN nt.action = 'buy' THEN nt.member_id END)::int AS buyer_count,
+			COUNT(DISTINCT CASE WHEN nt.action = 'sell' THEN nt.member_id END)::int AS seller_count,
+			COUNT(DISTINCT CASE WHEN hs.status = 'open' THEN hs.member_id END)::int AS open_position_count,
+			COUNT(DISTINCT CASE WHEN hs.status = 'closed' THEN hs.member_id END)::int AS closed_position_count,
+			MAX(nt.trade_date) AS latest_activity_at
+		FROM assets a
+		LEFT JOIN holding_snapshots hs ON hs.asset_id = a.id AND hs.verification_status = 'verified'
+		LEFT JOIN normalized_transactions nt ON nt.asset_id = a.id AND nt.verification_status = 'verified'
+		GROUP BY a.id
+		ORDER BY holder_count DESC, latest_activity_at DESC NULLS LAST, a.display_name ASC
+		LIMIT $1`,
+		[limit]
+	);
+
+	return result.rows.map((row) => ({
+		asset: {
+			id: row.id,
+			displayName: row.display_name,
+			tickerSymbol: row.ticker_symbol,
+			assetType: row.asset_type,
+			isSymbolResolved: row.is_symbol_resolved
+		},
+		holderCount: Number(row.holder_count),
+		buyerCount: Number(row.buyer_count),
+		sellerCount: Number(row.seller_count),
+		openPositionCount: Number(row.open_position_count),
+		closedPositionCount: Number(row.closed_position_count),
+		latestActivityAt: row.latest_activity_at ? new Date(row.latest_activity_at).toISOString() : null
+	}));
+}
+
+export async function getMemberPortfolioSummary(memberId: string): Promise<MemberPortfolioSummary> {
+	const pool = getRequiredPool();
+
+	const realizedResult = await pool.query(
+		`SELECT COALESCE(SUM(realized_profit_loss), 0)::float8 AS realized_profit_loss_total
+		FROM realized_profit_events
+		WHERE member_id = $1`,
+		[memberId]
+	);
+	const realizedProfitLossTotal = Number(realizedResult.rows[0]?.realized_profit_loss_total ?? 0);
+
+	const holdingsResult = await pool.query(
+		`SELECT
+			h.asset_id,
+			h.shares_held,
+			h.average_cost_basis_per_share,
+			h.last_market_price,
+			COALESCE(h.unrealized_profit_loss, 0)::float8 AS unrealized_profit_loss,
+			a.display_name,
+			a.ticker_symbol,
+			a.asset_type,
+			a.is_symbol_resolved
+		FROM holding_snapshots h
+		JOIN assets a ON a.id = h.asset_id
+		WHERE h.member_id = $1
+			AND h.verification_status = 'verified'
+			AND h.status = 'open'
+		ORDER BY a.display_name ASC`,
+		[memberId]
+	);
+
+	const openPositions = holdingsResult.rows.map((row) => {
+		const remainingShares = Number(row.shares_held ?? 0);
+		const averageCostBasisPerShare = Number(row.average_cost_basis_per_share ?? 0);
+		const lastMarketPrice = row.last_market_price === null ? null : Number(row.last_market_price);
+		const unrealizedProfitLoss = Number(row.unrealized_profit_loss ?? 0);
+		const priceForValue = lastMarketPrice ?? averageCostBasisPerShare;
+		return {
+			asset: {
+				id: row.asset_id,
+				displayName: row.display_name,
+				tickerSymbol: row.ticker_symbol,
+				assetType: row.asset_type,
+				isSymbolResolved: row.is_symbol_resolved
+			},
+			remainingShares,
+			averageCostBasisPerShare,
+			lastMarketPrice,
+			unrealizedProfitLoss,
+			currentPositionValue: remainingShares * priceForValue
+		};
+	});
+
+	const unrealizedProfitLossTotal = openPositions.reduce((sum, row) => sum + row.unrealizedProfitLoss, 0);
+	const currentHeldAssetsValue = openPositions.reduce((sum, row) => sum + row.currentPositionValue, 0);
+
+	return {
+		memberId,
+		realizedProfitLossTotal,
+		unrealizedProfitLossTotal,
+		cumulativeReturnTotal: realizedProfitLossTotal + unrealizedProfitLossTotal,
+		currentHeldAssetsValue,
+		openPositions
 	};
 }
 

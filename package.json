@@ -12,6 +12,8 @@
 		"worker:ingestion": "node scripts/run-ingestion.js",
 		"worker:pricing-refresh": "node scripts/run-pricing-refresh.js",
 		"worker:alerts": "node scripts/run-alert-worker.js",
+		"demo:seed": "node scripts/run-demo-seed.js",
+		"demo:refresh": "node scripts/run-demo-refresh.js",
 		"test": "node --test tests/**/*.test.js"
 	},
 	"dependencies": {

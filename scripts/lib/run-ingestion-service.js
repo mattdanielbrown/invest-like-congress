@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Client } from "pg";
+import pg from "pg";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+const { Client } = pg;
 
 function parseArgument(name, fallbackValue) {
 	const prefix = `--${name}=`;
@@ -338,6 +340,260 @@ async function persistRunSummary(client, summary) {
 	);
 }
 
+function toPositiveNumber(value) {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return null;
+	}
+	return parsed;
+}
+
+function toMidpointAmount(transaction) {
+	const minimumAmount = toPositiveNumber(transaction.total_amount_min);
+	const maximumAmount = toPositiveNumber(transaction.total_amount_max);
+	if (!minimumAmount && !maximumAmount) {
+		return null;
+	}
+	if (minimumAmount && maximumAmount) {
+		return (minimumAmount + maximumAmount) / 2;
+	}
+	return minimumAmount ?? maximumAmount;
+}
+
+function estimateSharesAndPrice(transaction) {
+	let shares = toPositiveNumber(transaction.share_quantity);
+	let pricePerShare = toPositiveNumber(transaction.price_per_share);
+	const midpointAmount = toMidpointAmount(transaction);
+
+	if (!shares && midpointAmount && pricePerShare) {
+		shares = midpointAmount / pricePerShare;
+	}
+	if (!shares && midpointAmount) {
+		shares = 1;
+	}
+	if (!pricePerShare && midpointAmount) {
+		pricePerShare = midpointAmount / (shares ?? 1);
+	}
+	if (!shares || !pricePerShare) {
+		return null;
+	}
+
+	return {
+		shares,
+		pricePerShare
+	};
+}
+
+function buildPositionChangeAction(action, sharesBefore, sharesAfter) {
+	if (action === "buy") {
+		return sharesBefore <= 0 ? "position-opened" : "position-increased";
+	}
+	return sharesAfter <= 0 ? "position-closed" : "position-partially-sold";
+}
+
+async function rebuildDerivedPortfolioState(client) {
+	const transactionsResult = await client.query(
+		`SELECT
+			id,
+			member_id,
+			asset_id,
+			action,
+			trade_date,
+			share_quantity,
+			price_per_share,
+			total_amount_min,
+			total_amount_max
+		FROM normalized_transactions
+		WHERE verification_status = 'verified'
+		ORDER BY member_id ASC, asset_id ASC, trade_date ASC, id ASC`
+	);
+
+	const transactionsByPair = new Map();
+	for (const row of transactionsResult.rows) {
+		const pairKey = `${row.member_id}:${row.asset_id}`;
+		const currentRows = transactionsByPair.get(pairKey) ?? [];
+		currentRows.push(row);
+		transactionsByPair.set(pairKey, currentRows);
+	}
+
+	const holdingRows = [];
+	const realizedRows = [];
+	const positionStateRows = [];
+	const positionChangeRows = [];
+
+	for (const [pairKey, pairTransactions] of transactionsByPair.entries()) {
+		const [memberId, assetId] = pairKey.split(":");
+		const lots = [];
+		let sharesBefore = 0;
+
+		for (const transaction of pairTransactions) {
+			const estimate = estimateSharesAndPrice(transaction);
+			if (!estimate) {
+				continue;
+			}
+
+			const tradeShares = estimate.shares;
+			const tradePrice = estimate.pricePerShare;
+			let realizedProfitLoss = null;
+
+			if (transaction.action === "buy") {
+				lots.push({
+					shares: tradeShares,
+					costBasisPerShare: tradePrice
+				});
+			} else {
+				let sharesToSell = tradeShares;
+				let realizedForTransaction = 0;
+				while (sharesToSell > 0 && lots.length > 0) {
+					const earliestLot = lots[0];
+					const lotSharesToSell = Math.min(earliestLot.shares, sharesToSell);
+					realizedForTransaction += lotSharesToSell * (tradePrice - earliestLot.costBasisPerShare);
+					earliestLot.shares -= lotSharesToSell;
+					sharesToSell -= lotSharesToSell;
+					if (earliestLot.shares <= 0.000001) {
+						lots.shift();
+					}
+				}
+				realizedProfitLoss = realizedForTransaction;
+				realizedRows.push({
+					id: randomUUID(),
+					memberId,
+					assetId,
+					sourceTransactionId: transaction.id,
+					realizedProfitLoss: realizedForTransaction
+				});
+			}
+
+			const sharesAfter = lots.reduce((sum, lot) => sum + lot.shares, 0);
+			const positionStatus = sharesAfter > 0.000001 ? "open" : "closed";
+			positionStateRows.push({
+				id: randomUUID(),
+				sourceTransactionId: transaction.id,
+				positionStatus
+			});
+
+			positionChangeRows.push({
+				id: randomUUID(),
+				memberId,
+				assetId,
+				action: buildPositionChangeAction(transaction.action, sharesBefore, sharesAfter),
+				shareDelta: transaction.action === "buy" ? tradeShares : -tradeShares,
+				realizedProfitLoss,
+				sourceTransactionId: transaction.id
+			});
+
+			sharesBefore = sharesAfter;
+		}
+
+		const sharesHeld = lots.reduce((sum, lot) => sum + lot.shares, 0);
+		const totalCostBasis = lots.reduce((sum, lot) => sum + (lot.shares * lot.costBasisPerShare), 0);
+		const averageCostBasisPerShare = sharesHeld > 0.000001 ? totalCostBasis / sharesHeld : 0;
+
+		holdingRows.push({
+			id: randomUUID(),
+			memberId,
+			assetId,
+			sharesHeld,
+			averageCostBasisPerShare,
+			lastMarketPrice: null,
+			unrealizedProfitLoss: null,
+			status: sharesHeld > 0.000001 ? "open" : "closed",
+			verificationStatus: "verified"
+		});
+	}
+
+	await client.query("BEGIN");
+	try {
+		await client.query("DELETE FROM realized_profit_events");
+		await client.query("DELETE FROM position_state_events");
+		await client.query("DELETE FROM holding_snapshots");
+		await client.query("DELETE FROM position_change_events");
+
+		for (const row of holdingRows) {
+			await client.query(
+				`INSERT INTO holding_snapshots (
+					id,
+					member_id,
+					asset_id,
+					shares_held,
+					average_cost_basis_per_share,
+					last_market_price,
+					unrealized_profit_loss,
+					status,
+					verification_status,
+					verified_updated_at
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
+				[
+					row.id,
+					row.memberId,
+					row.assetId,
+					row.sharesHeld,
+					row.averageCostBasisPerShare,
+					row.lastMarketPrice,
+					row.unrealizedProfitLoss,
+					row.status,
+					row.verificationStatus
+				]
+			);
+		}
+
+		for (const row of realizedRows) {
+			await client.query(
+				`INSERT INTO realized_profit_events (
+					id,
+					member_id,
+					asset_id,
+					source_transaction_id,
+					realized_profit_loss
+				)
+				VALUES ($1, $2, $3, $4, $5)`,
+				[row.id, row.memberId, row.assetId, row.sourceTransactionId, row.realizedProfitLoss]
+			);
+		}
+
+		for (const row of positionStateRows) {
+			await client.query(
+				`INSERT INTO position_state_events (
+					id,
+					source_transaction_id,
+					position_status
+				)
+				VALUES ($1, $2, $3)`,
+				[row.id, row.sourceTransactionId, row.positionStatus]
+			);
+		}
+
+		for (const row of positionChangeRows) {
+			await client.query(
+				`INSERT INTO position_change_events (
+					id,
+					member_id,
+					asset_id,
+					action,
+					share_delta,
+					realized_profit_loss,
+					source_transaction_id
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				[row.id, row.memberId, row.assetId, row.action, row.shareDelta, row.realizedProfitLoss, row.sourceTransactionId]
+			);
+		}
+
+		await client.query("COMMIT");
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	}
+
+	return {
+		holdingRows: holdingRows.length,
+		realizedRows: realizedRows.length,
+		positionStateRows: positionStateRows.length,
+		positionChangeRows: positionChangeRows.length
+	};
+}
+
 export async function runIngestionWorkerFromCli() {
 	if (!process.env.DATABASE_URL) {
 		throw new Error("DATABASE_URL is required.");
@@ -486,7 +742,10 @@ export async function runIngestionWorkerFromCli() {
 					await client.query(
 						`INSERT INTO assets (id, display_name, ticker_symbol, asset_type, is_symbol_resolved)
 						 VALUES ($1, $2, $3, $4, $5)
-						 ON CONFLICT (id) DO NOTHING`,
+						 ON CONFLICT (id)
+						 DO UPDATE SET
+							ticker_symbol = COALESCE(assets.ticker_symbol, EXCLUDED.ticker_symbol),
+							is_symbol_resolved = assets.is_symbol_resolved OR EXCLUDED.is_symbol_resolved`,
 						[assetId, candidate.assetDisplayName, candidate.tickerSymbol, "unknown", !!candidate.tickerSymbol]
 					);
 
@@ -555,13 +814,14 @@ export async function runIngestionWorkerFromCli() {
 				throw error;
 			}
 
-		if (!lastSeenFiledAt || new Date(reference.filedAt).getTime() > new Date(lastSeenFiledAt).getTime()) {
-				lastSeenFiledAt = reference.filedAt;
+				if (!lastSeenFiledAt || new Date(reference.filedAt).getTime() > new Date(lastSeenFiledAt).getTime()) {
+					lastSeenFiledAt = reference.filedAt;
+				}
 			}
-		}
 
-		await persistCheckpoint(client, "official-ptr", checkpointKey, lastSeenFiledAt);
-		await client.query("UPDATE system_status SET last_ingestion_at = now() WHERE id = 1");
+			const derivedRefreshResult = await rebuildDerivedPortfolioState(client);
+			await persistCheckpoint(client, "official-ptr", checkpointKey, lastSeenFiledAt);
+			await client.query("UPDATE system_status SET last_ingestion_at = now() WHERE id = 1");
 
 		const provenanceCoverageRatio = extractedTransactions > 0 ? provenanceFields / extractedTransactions : 0;
 		await persistRunSummary(client, {
@@ -581,7 +841,7 @@ export async function runIngestionWorkerFromCli() {
 			provenanceCoverageRatio,
 			warnings
 		});
-		console.info("[ingestion] completed", {
+			console.info("[ingestion] completed", {
 			runId,
 			mode,
 			fromYear,
@@ -589,10 +849,11 @@ export async function runIngestionWorkerFromCli() {
 			fetchedDocuments,
 			parsedDocuments,
 			quarantinedDocuments,
-			extractedTransactions,
-			provenanceCoverageRatio,
-			warnings
-		});
+				extractedTransactions,
+				provenanceCoverageRatio,
+				derivedRefreshResult,
+				warnings
+			});
 	} catch (error) {
 		await persistRunSummary(client, {
 			runId,

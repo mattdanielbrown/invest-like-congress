@@ -1,5 +1,7 @@
-import { Client } from "pg";
+import pg from "pg";
 import { randomUUID } from "node:crypto";
+
+const { Client } = pg;
 
 function formatAlertBody(event) {
 	return [

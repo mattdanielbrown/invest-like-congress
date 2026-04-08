@@ -118,6 +118,24 @@ export interface MemberHoldingsRow {
 	lastVerifiedUpdateAt: string;
 }
 
+export interface MemberOpenPositionRow {
+	asset: Asset;
+	remainingShares: number;
+	averageCostBasisPerShare: number;
+	lastMarketPrice: number | null;
+	unrealizedProfitLoss: number;
+	currentPositionValue: number;
+}
+
+export interface MemberPortfolioSummary {
+	memberId: string;
+	realizedProfitLossTotal: number;
+	unrealizedProfitLossTotal: number;
+	cumulativeReturnTotal: number;
+	currentHeldAssetsValue: number;
+	openPositions: MemberOpenPositionRow[];
+}
+
 export interface AssetActivityRow {
 	asset: Asset;
 	holderCount: number;

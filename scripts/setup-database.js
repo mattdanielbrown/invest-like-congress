@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "pg";
+import pg from "pg";
+import { loadEnvironmentFile } from "./lib/load-environment.js";
+
+const { Client } = pg;
+loadEnvironmentFile();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
