@@ -2,6 +2,10 @@
 
 Verified congressional portfolio tracking with a public website and supporting ingestion/notification services.
 
+## Working contract
+
+Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first MVP operating contract in [AGENTS.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/AGENTS.md).
+
 ## What is implemented
 
 - `Next.js` App Router website with:
