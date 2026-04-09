@@ -9,6 +9,12 @@ import { databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { getIntradayRefreshHoursUtc } from "@/lib/scheduling/intraday-schedule";
 
+const alertsTruthfulness = {
+	deliveryMode: "dry-run-only",
+	mvpStatus: "not-provider-backed",
+	message: "Provider-backed alert email delivery is not implemented; worker dispatch currently runs in dry-run mode."
+} as const;
+
 export async function GET() {
 	try {
 		const [
@@ -39,6 +45,7 @@ export async function GET() {
 			status,
 			pricingRefreshHoursUtc: getIntradayRefreshHoursUtc(),
 			targetRefreshRunsPerTradingDay: 3,
+			alerts: alertsTruthfulness,
 			healthSignals: {
 				pendingAlertEventCount,
 				minutesSinceLastIngestion,

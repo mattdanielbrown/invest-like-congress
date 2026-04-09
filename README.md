@@ -71,6 +71,7 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 - Pricing refresh updates `holding_snapshots.last_market_price` and `holding_snapshots.unrealized_profit_loss` for open positions with resolved tickers.
 - Pricing data source defaults to Stooq CSV fallback; set `MARKET_DATA_BASE_URL` and optional `MARKET_DATA_API_KEY` to use a provider endpoint.
 - Email provider integration is currently dry-run logging unless `EMAIL_PROVIDER_API_KEY` wiring is completed to a specific provider API.
+- Alerts APIs and `GET /api/system/status` explicitly label alert delivery as non-MVP dry-run until provider-backed delivery is implemented.
 - The app and API are database-backed only. If `DATABASE_URL` is missing, pages and APIs return explicit setup-required responses.
 
 ## Ingestion runbook

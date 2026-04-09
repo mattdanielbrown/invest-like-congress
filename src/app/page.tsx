@@ -5,6 +5,8 @@ import { getMembersWithHoldings } from "@/lib/domain/member-service";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import type { MemberQueryFilters } from "@/lib/db/schema-types";
 
+export const dynamic = "force-dynamic";
+
 interface HomePageProps {
 	searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }

@@ -2,6 +2,8 @@ import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { listQuarantinedTransactions } from "@/lib/db/repository";
 
+export const dynamic = "force-dynamic";
+
 export default async function QuarantinePage() {
 	let rows;
 	try {

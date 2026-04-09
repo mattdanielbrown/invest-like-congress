@@ -3,6 +3,8 @@ import Link from "next/link";
 import { getMemberPortfolioSummaryById, getMemberTransactions } from "@/lib/domain/member-service";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
+export const dynamic = "force-dynamic";
+
 interface MemberDetailPageProps {
 	params: Promise<{
 		memberId: string;

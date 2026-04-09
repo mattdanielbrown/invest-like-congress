@@ -3,6 +3,8 @@ import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { getAssetsWithActivity } from "@/lib/domain/asset-service";
 
+export const dynamic = "force-dynamic";
+
 function formatDateCell(value: string | null): string {
 	if (!value) {
 		return "n/a";

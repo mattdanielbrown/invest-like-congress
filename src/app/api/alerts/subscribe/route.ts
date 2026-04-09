@@ -3,6 +3,12 @@ import { badRequest, databaseSetupRequired, internalError, okJson } from "@/lib/
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { loadServerEnv } from "@/lib/env/server-env";
 
+const alertsTruthfulness = {
+	deliveryMode: "dry-run-only",
+	mvpStatus: "not-provider-backed",
+	message: "Alert subscriptions are active for MVP evaluation, but provider-backed email delivery is not yet implemented."
+} as const;
+
 function isEmailAddress(value: string): boolean {
 	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -29,7 +35,8 @@ export async function POST(request: Request) {
 		return okJson({
 			subscriptionId: subscription.id,
 			isVerified: subscription.isVerified,
-			verificationUrl
+			verificationUrl,
+			alerts: alertsTruthfulness
 		});
 	} catch (error) {
 		if (isDatabaseNotConfiguredError(error)) {

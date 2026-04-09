@@ -2,6 +2,8 @@ import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import { getAssetActivityById } from "@/lib/domain/asset-service";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
+export const dynamic = "force-dynamic";
+
 interface AssetDetailPageProps {
 	params: Promise<{
 		assetId: string;

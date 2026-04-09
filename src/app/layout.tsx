@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
 	title: "Congress Portfolio Tracker",
-	description: "Verified congressional portfolio holdings and alerts"
+	description: "Verified congressional portfolio holdings from official House and Senate filings"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -20,7 +20,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 						<nav>
 							<Link href="/">Members</Link>
 							<Link href="/assets">Assets</Link>
-							<Link href="/admin/quarantine">Quarantine</Link>
 						</nav>
 					</header>
 					<main>{children}</main>

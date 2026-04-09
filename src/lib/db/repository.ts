@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { getDatabasePool } from "@/lib/db/pool";
 import type { MemberQueryFilters } from "@/lib/db/schema-types";
 import type {
@@ -1139,7 +1139,7 @@ export async function listVerifiedTransactionsForDerivedState(): Promise<Normali
 	}));
 }
 
-async function listExistingHoldingSnapshotPrices(client: Pool | Awaited<ReturnType<Pool["connect"]>>): Promise<ExistingHoldingSnapshotPriceRow[]> {
+async function listExistingHoldingSnapshotPrices(client: Pool | PoolClient): Promise<ExistingHoldingSnapshotPriceRow[]> {
 	const result = await client.query(
 		`SELECT member_id, asset_id, last_market_price
 		FROM holding_snapshots
@@ -1169,7 +1169,7 @@ function computeUnrealizedProfitLoss(
 }
 
 async function deleteStaleHoldingSnapshots(
-	client: Awaited<ReturnType<Pool["connect"]>>,
+	client: PoolClient,
 	holdingSnapshots: DerivedHoldingSnapshotInput[]
 ): Promise<void> {
 	if (holdingSnapshots.length === 0) {
@@ -1193,7 +1193,7 @@ async function deleteStaleHoldingSnapshots(
 }
 
 async function deleteStaleTransactionScopedRows(
-	client: Awaited<ReturnType<Pool["connect"]>>,
+	client: PoolClient,
 	tableName: "realized_profit_events" | "position_state_events" | "position_change_events",
 	sourceTransactionIds: string[]
 ): Promise<void> {
@@ -1210,7 +1210,7 @@ async function deleteStaleTransactionScopedRows(
 }
 
 async function upsertHoldingSnapshots(
-	client: Awaited<ReturnType<Pool["connect"]>>,
+	client: PoolClient,
 	holdingSnapshots: DerivedHoldingSnapshotInput[]
 ): Promise<void> {
 	const existingPriceRows = await listExistingHoldingSnapshotPrices(client);
@@ -1260,7 +1260,7 @@ async function upsertHoldingSnapshots(
 }
 
 async function upsertRealizedProfitEvents(
-	client: Awaited<ReturnType<Pool["connect"]>>,
+	client: PoolClient,
 	events: DerivedRealizedProfitEventInput[]
 ): Promise<void> {
 	for (const event of events) {
@@ -1290,7 +1290,7 @@ async function upsertRealizedProfitEvents(
 }
 
 async function upsertPositionStateEvents(
-	client: Awaited<ReturnType<Pool["connect"]>>,
+	client: PoolClient,
 	events: DerivedPositionStateEventInput[]
 ): Promise<void> {
 	for (const event of events) {
@@ -1314,7 +1314,7 @@ async function upsertPositionStateEvents(
 }
 
 async function upsertPositionChangeEvents(
-	client: Awaited<ReturnType<Pool["connect"]>>,
+	client: PoolClient,
 	events: DerivedPositionChangeEventInput[]
 ): Promise<void> {
 	for (const event of events) {
