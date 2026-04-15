@@ -1,4 +1,5 @@
 import {
+	getVerifiedDataCounts,
 	getLatestIngestionRunSummary,
 	getLatestSuccessfulWorkerRunSummary,
 	getLatestWorkerRunSummary,
@@ -15,10 +16,36 @@ const alertsTruthfulness = {
 	message: "Provider-backed alert email delivery is not implemented; worker dispatch currently runs in dry-run mode."
 } as const;
 
+function resolveDemoDataMode(options: {
+	verifiedTransactions: number;
+	demoSeedTransactions: number;
+	officialTransactions: number;
+	latestIngestionRunSuccess: boolean | null;
+	latestIngestionExtractedTransactions: number | null;
+}) {
+	if (options.verifiedTransactions === 0) {
+		return "empty";
+	}
+	if (options.demoSeedTransactions > 0 && options.officialTransactions === 0) {
+		return "deterministic-fallback";
+	}
+	if (options.demoSeedTransactions > 0 && options.officialTransactions > 0) {
+		return "mixed";
+	}
+	if (options.officialTransactions > 0) {
+		return "official-ingestion";
+	}
+	if (options.latestIngestionRunSuccess === false || options.latestIngestionExtractedTransactions === 0) {
+		return "deterministic-fallback";
+	}
+	return "official-ingestion";
+}
+
 export async function GET() {
 	try {
 		const [
 			status,
+			verifiedDataCounts,
 			pendingAlertEventCount,
 			latestIngestionRun,
 			latestPricingRefreshRun,
@@ -26,6 +53,7 @@ export async function GET() {
 			latestSuccessfulAlertWorkerRun
 		] = await Promise.all([
 			getSystemStatus(),
+			getVerifiedDataCounts(),
 			getPendingAlertEventCount(),
 			getLatestIngestionRunSummary(),
 			getLatestWorkerRunSummary("pricing-refresh"),
@@ -41,11 +69,23 @@ export async function GET() {
 		const minutesSinceLastSuccessfulAlertDispatch = latestSuccessfulAlertWorkerRun
 			? Math.floor((Date.now() - new Date(latestSuccessfulAlertWorkerRun.finishedAt).getTime()) / (60 * 1000))
 			: null;
+		const demoDataMode = resolveDemoDataMode({
+			verifiedTransactions: verifiedDataCounts.verifiedTransactions,
+			demoSeedTransactions: verifiedDataCounts.demoSeedTransactions,
+			officialTransactions: verifiedDataCounts.officialTransactions,
+			latestIngestionRunSuccess: latestIngestionRun?.success ?? null,
+			latestIngestionExtractedTransactions: latestIngestionRun?.extractedTransactions ?? null
+		});
+
 		return okJson({
 			status,
 			pricingRefreshHoursUtc: getIntradayRefreshHoursUtc(),
 			targetRefreshRunsPerTradingDay: 3,
 			alerts: alertsTruthfulness,
+			demoData: {
+				mode: demoDataMode,
+				counts: verifiedDataCounts
+			},
 			healthSignals: {
 				pendingAlertEventCount,
 				minutesSinceLastIngestion,

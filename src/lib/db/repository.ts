@@ -33,6 +33,15 @@ interface StatusRow {
 	marketSessionState: string;
 }
 
+export interface VerifiedDataCounts {
+	verifiedTransactions: number;
+	verifiedHoldingSnapshots: number;
+	verifiedMembers: number;
+	verifiedAssets: number;
+	demoSeedTransactions: number;
+	officialTransactions: number;
+}
+
 type IngestionMode = "backfill" | "hourly";
 
 interface PersistParsedFilingInput {
@@ -515,6 +524,45 @@ export async function getSystemStatus(): Promise<StatusRow> {
 		lastPricingRefreshAt: row.last_pricing_refresh_at ? new Date(row.last_pricing_refresh_at).toISOString() : null,
 		nextPricingRefreshAt: row.next_pricing_refresh_at ? new Date(row.next_pricing_refresh_at).toISOString() : null,
 		marketSessionState: row.market_session_state
+	};
+}
+
+export async function getVerifiedDataCounts(): Promise<VerifiedDataCounts> {
+	const pool = getRequiredPool();
+	const result = await pool.query(
+		`SELECT
+			(SELECT COUNT(*)::int
+				FROM normalized_transactions
+				WHERE verification_status = 'verified') AS verified_transactions,
+			(SELECT COUNT(*)::int
+				FROM holding_snapshots
+				WHERE verification_status = 'verified') AS verified_holding_snapshots,
+			(SELECT COUNT(DISTINCT member_id)::int
+				FROM normalized_transactions
+				WHERE verification_status = 'verified') AS verified_members,
+			(SELECT COUNT(DISTINCT asset_id)::int
+				FROM normalized_transactions
+				WHERE verification_status = 'verified') AS verified_assets,
+			(SELECT COUNT(*)::int
+				FROM normalized_transactions t
+				LEFT JOIN filing_documents fd ON fd.source_document_id = t.filing_document_id
+				WHERE t.verification_status = 'verified'
+					AND fd.source_system = 'demo-seed') AS demo_seed_transactions,
+			(SELECT COUNT(*)::int
+				FROM normalized_transactions t
+				LEFT JOIN filing_documents fd ON fd.source_document_id = t.filing_document_id
+				WHERE t.verification_status = 'verified'
+					AND COALESCE(fd.source_system, '') <> 'demo-seed') AS official_transactions`
+	);
+
+	const row = result.rows[0] ?? {};
+	return {
+		verifiedTransactions: Number(row.verified_transactions ?? 0),
+		verifiedHoldingSnapshots: Number(row.verified_holding_snapshots ?? 0),
+		verifiedMembers: Number(row.verified_members ?? 0),
+		verifiedAssets: Number(row.verified_assets ?? 0),
+		demoSeedTransactions: Number(row.demo_seed_transactions ?? 0),
+		officialTransactions: Number(row.official_transactions ?? 0)
 	};
 }
 

@@ -93,7 +93,7 @@ const demoTransactions = [
 async function shouldSeedDemoData(client) {
 	const result = await client.query(
 		`SELECT COUNT(*)::int AS count
-		FROM holding_snapshots
+		FROM normalized_transactions
 		WHERE verification_status = 'verified'`
 	);
 	const count = Number(result.rows[0]?.count ?? 0);
@@ -322,7 +322,7 @@ async function run() {
 	try {
 		const seedRequired = await shouldSeedDemoData(client);
 		if (!seedRequired) {
-			console.info("[demo-seed] skipped; verified holdings already present");
+			console.info("[demo-seed] skipped; verified transactions already present");
 			return;
 		}
 

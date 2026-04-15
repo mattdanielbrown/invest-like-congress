@@ -91,21 +91,24 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 5. Start incremental hourly polling
 	- `npm run worker:ingestion -- --mode=hourly --from-year=2019 --to-year=2026`
 
-## Demo runbook (24-hour MVP mode)
+## Demo refresh checklist (Milestone 3)
 
-1. Configure env and DB
-	- `cp .env.example .env`
+1. Reset to an empty local DB and apply schema
+	- `docker compose down -v`
 	- `docker compose up -d`
 	- `npm run db:setup`
-2. Refresh demo dataset (defaults to current year)
+2. Run the end-to-end demo refresh
 	- `npm run demo:refresh`
-	- If ingestion parses zero filings, a deterministic fallback demo dataset is auto-seeded.
-3. Optionally refresh a custom year window
-	- `DEMO_FROM_YEAR=2025 DEMO_TO_YEAR=2026 npm run demo:refresh`
-4. Verify demo endpoints
+	- Behavior:
+		- Official ingestion is attempted first.
+		- Deterministic fallback seed is applied automatically when ingestion fails or yields `0` verified transactions.
+3. Verify demo usability
 	- `npm run dev`
-	- `GET /api/system/status`
-	- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`
+	- Check `GET /api/system/status` and confirm `demoData.mode`.
+	- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`.
+4. Verify fallback path explicitly
+	- `DEMO_FROM_YEAR=2100 DEMO_TO_YEAR=2100 npm run demo:refresh`
+	- Re-check `GET /api/system/status` and confirm `demoData.mode` reports fallback.
 
 ## Worker behavior
 

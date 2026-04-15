@@ -19,3 +19,10 @@ test("ingestion worker delegates to shared live ingestion runtime", async () => 
 	assert.equal(source.includes("parsePtrCandidatesFromText"), false);
 	assert.equal(source.includes("fetchHouseReferences"), false);
 });
+
+test("demo refresh script conditionally applies fallback seed", async () => {
+	const source = await load("scripts/run-demo-refresh.js");
+	assert.equal(source.includes("shouldApplyDeterministicFallback"), true);
+	assert.equal(source.includes("await runCommand(\"node\", [\"scripts/run-demo-seed.js\"]);"), true);
+	assert.equal(source.includes("let fallbackApplied = false"), true);
+});

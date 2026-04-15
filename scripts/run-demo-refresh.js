@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
+import pg from "pg";
+import { shouldApplyDeterministicFallback, resolveDemoDataMode } from "./lib/demo-data-mode.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
+const { Client } = pg;
 
 function runCommand(command, args) {
 	return new Promise((resolve, reject) => {
@@ -34,6 +37,25 @@ function toYearBounds() {
 	};
 }
 
+async function getVerifiedTransactionCount() {
+	if (!process.env.DATABASE_URL) {
+		throw new Error("DATABASE_URL is required.");
+	}
+
+	const client = new Client({ connectionString: process.env.DATABASE_URL });
+	await client.connect();
+	try {
+		const result = await client.query(
+			`SELECT COUNT(*)::int AS count
+			FROM normalized_transactions
+			WHERE verification_status = 'verified'`
+		);
+		return Number(result.rows[0]?.count ?? 0);
+	} finally {
+		await client.end();
+	}
+}
+
 async function run() {
 	const { fromYear, toYear } = toYearBounds();
 	const ingestionRuntimeArgs = [
@@ -44,11 +66,51 @@ async function run() {
 	console.info("[demo-refresh] starting", { fromYear, toYear });
 
 	await runCommand("node", ["scripts/setup-database.js"]);
-	await runCommand("node", [...ingestionRuntimeArgs, "scripts/run-ingestion.js", `--mode=backfill`, `--from-year=${fromYear}`, `--to-year=${toYear}`]);
-	await runCommand("node", ["scripts/run-demo-seed.js"]);
+	let ingestionFailureReason = null;
+	try {
+		await runCommand("node", [...ingestionRuntimeArgs, "scripts/run-ingestion.js", `--mode=backfill`, `--from-year=${fromYear}`, `--to-year=${toYear}`]);
+	} catch (error) {
+		ingestionFailureReason = error instanceof Error ? error.message : String(error);
+		console.warn("[demo-refresh] ingestion failed; continuing with fallback check", {
+			fromYear,
+			toYear,
+			failureReason: ingestionFailureReason
+		});
+	}
+
+	const verifiedTransactionCountAfterIngestion = await getVerifiedTransactionCount();
+	const fallbackRequired = shouldApplyDeterministicFallback({
+		ingestionFailed: ingestionFailureReason !== null,
+		verifiedTransactionCount: verifiedTransactionCountAfterIngestion
+	});
+
+	let fallbackApplied = false;
+	if (fallbackRequired) {
+		await runCommand("node", ["scripts/run-demo-seed.js"]);
+		fallbackApplied = true;
+	}
+
 	await runCommand("node", ["scripts/run-pricing-refresh.js"]);
 
-	console.info("[demo-refresh] completed", { fromYear, toYear });
+	const finalVerifiedTransactionCount = fallbackApplied
+		? await getVerifiedTransactionCount()
+		: verifiedTransactionCountAfterIngestion;
+	const demoDataMode = resolveDemoDataMode({
+		fallbackApplied,
+		verifiedTransactionCount: finalVerifiedTransactionCount
+	});
+
+	console.info("[demo-refresh] completed", {
+		fromYear,
+		toYear,
+		demoDataMode,
+		fallbackApplied,
+		verifiedTransactionCount: finalVerifiedTransactionCount,
+		ingestion: {
+			success: ingestionFailureReason === null,
+			failureReason: ingestionFailureReason
+		}
+	});
 }
 
 run().catch((error) => {
