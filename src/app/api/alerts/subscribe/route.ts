@@ -1,13 +1,8 @@
 import { subscribeAlertEmail, verifyAlertSubscription } from "@/lib/domain/alert-service";
-import { badRequest, databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
+import { badRequest, databaseSetupRequired, internalError, okJson, serviceUnavailable } from "@/lib/api/http";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { loadServerEnv } from "@/lib/env/server-env";
-
-const alertsTruthfulness = {
-	deliveryMode: "dry-run-only",
-	mvpStatus: "not-provider-backed",
-	message: "Alert subscriptions are active for MVP evaluation, but provider-backed email delivery is not yet implemented."
-} as const;
+import { alertsLaunchPolicy } from "@/lib/alerts/launch-policy";
 
 function isEmailAddress(value: string): boolean {
 	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -15,6 +10,14 @@ function isEmailAddress(value: string): boolean {
 
 export async function POST(request: Request) {
 	try {
+		if (!alertsLaunchPolicy.subscriptionsApiEnabled) {
+			return serviceUnavailable(
+				"alerts_deferred_for_launch",
+				alertsLaunchPolicy.message,
+				{ alerts: alertsLaunchPolicy }
+			);
+		}
+
 		const body = await request.json();
 		const emailAddress = typeof body?.emailAddress === "string" ? body.emailAddress.trim().toLowerCase() : "";
 		const memberIds = Array.isArray(body?.memberIds) ? body.memberIds.filter((item: unknown) => typeof item === "string") : [];
@@ -36,7 +39,7 @@ export async function POST(request: Request) {
 			subscriptionId: subscription.id,
 			isVerified: subscription.isVerified,
 			verificationUrl,
-			alerts: alertsTruthfulness
+			alerts: alertsLaunchPolicy
 		});
 	} catch (error) {
 		if (isDatabaseNotConfiguredError(error)) {
@@ -49,6 +52,14 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
 	try {
+		if (!alertsLaunchPolicy.subscriptionsApiEnabled) {
+			return serviceUnavailable(
+				"alerts_deferred_for_launch",
+				alertsLaunchPolicy.message,
+				{ alerts: alertsLaunchPolicy }
+			);
+		}
+
 		const { searchParams } = new URL(request.url);
 		const token = searchParams.get("token");
 		if (!token) {

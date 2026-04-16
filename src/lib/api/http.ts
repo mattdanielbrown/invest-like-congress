@@ -28,11 +28,12 @@ export function internalError(message: string) {
 	);
 }
 
-export function serviceUnavailable(code: string, message: string) {
+export function serviceUnavailable(code: string, message: string, details?: Record<string, unknown>) {
 	return NextResponse.json(
 		{
 			error: message,
-			code
+			code,
+			...(details ?? {})
 		},
 		{ status: 503 }
 	);

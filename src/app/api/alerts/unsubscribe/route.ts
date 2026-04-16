@@ -1,12 +1,7 @@
 import { unsubscribeAlertAddress } from "@/lib/domain/alert-service";
-import { badRequest, databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
+import { badRequest, databaseSetupRequired, internalError, okJson, serviceUnavailable } from "@/lib/api/http";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
-
-const alertsTruthfulness = {
-	deliveryMode: "dry-run-only",
-	mvpStatus: "not-provider-backed",
-	message: "Alert subscriptions are active for MVP evaluation, but provider-backed email delivery is not yet implemented."
-} as const;
+import { alertsLaunchPolicy } from "@/lib/alerts/launch-policy";
 
 function isEmailAddress(value: string): boolean {
 	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -14,6 +9,14 @@ function isEmailAddress(value: string): boolean {
 
 export async function POST(request: Request) {
 	try {
+		if (!alertsLaunchPolicy.subscriptionsApiEnabled) {
+			return serviceUnavailable(
+				"alerts_deferred_for_launch",
+				alertsLaunchPolicy.message,
+				{ alerts: alertsLaunchPolicy }
+			);
+		}
+
 		const body = await request.json();
 		const emailAddress = typeof body?.emailAddress === "string" ? body.emailAddress.trim().toLowerCase() : "";
 
@@ -24,7 +27,7 @@ export async function POST(request: Request) {
 		const unsubscribed = await unsubscribeAlertAddress(emailAddress);
 		return okJson({
 			unsubscribed,
-			alerts: alertsTruthfulness
+			alerts: alertsLaunchPolicy
 		});
 	} catch (error) {
 		if (isDatabaseNotConfiguredError(error)) {

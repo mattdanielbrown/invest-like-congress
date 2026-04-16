@@ -8,13 +8,8 @@ import {
 } from "@/lib/db/repository";
 import { databaseSetupRequired, internalError, okJson } from "@/lib/api/http";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
+import { alertsLaunchPolicy } from "@/lib/alerts/launch-policy";
 import { getIntradayRefreshHoursUtc } from "@/lib/scheduling/intraday-schedule";
-
-const alertsTruthfulness = {
-	deliveryMode: "dry-run-only",
-	mvpStatus: "not-provider-backed",
-	message: "Provider-backed alert email delivery is not implemented; worker dispatch currently runs in dry-run mode."
-} as const;
 
 function resolveDemoDataMode(options: {
 	verifiedTransactions: number;
@@ -81,7 +76,7 @@ export async function GET() {
 			status,
 			pricingRefreshHoursUtc: getIntradayRefreshHoursUtc(),
 			targetRefreshRunsPerTradingDay: 3,
-			alerts: alertsTruthfulness,
+			alerts: alertsLaunchPolicy,
 			demoData: {
 				mode: demoDataMode,
 				counts: verifiedDataCounts

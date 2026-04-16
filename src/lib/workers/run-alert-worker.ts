@@ -8,6 +8,7 @@ import {
 } from "@/lib/db/repository";
 import { loadServerEnv } from "@/lib/env/server-env";
 import { runSharedWorker } from "@/lib/workers/run-shared-worker.js";
+import { alertsLaunchPolicy } from "@/lib/alerts/launch-policy";
 
 export async function runAlertWorkerFromCli() {
 	const env = loadServerEnv();
@@ -18,6 +19,24 @@ export async function runAlertWorkerFromCli() {
 		allowDryRunWithoutDatabase: process.env.WORKER_ALLOW_DRY_RUN === "1" || process.env.WORKER_ALLOW_DRY_RUN === "true",
 		persistRunSummary: persistWorkerRunSummary,
 		execute: async ({ runId }) => {
+			if (!alertsLaunchPolicy.workerDispatchEnabled) {
+				return {
+					metrics: {
+						alertDispatchEnabled: false,
+						claimedEvents: 0,
+						processedEvents: 0,
+						failedEvents: 0,
+						deliveriesAttempted: 0,
+						deliveriesCompleted: 0,
+						dryRunDeliveries: 0
+					},
+					warnings: [
+						"Alert dispatch is deferred from launch; worker run exited without processing events."
+					],
+					failureReason: null
+				};
+			}
+
 			return deliverPendingAlertEvents({
 				runId,
 				claimPendingPositionEvents: (limit) => claimPendingPositionEvents(limit, runId),

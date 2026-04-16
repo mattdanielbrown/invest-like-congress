@@ -35,7 +35,7 @@ In Render, open the `congress-portfolio-web` service settings and confirm/set th
 - `EMAIL_FROM_ADDRESS`
   - Value: `alerts@congress-portfolio.local`
 - `EMAIL_PROVIDER_API_KEY`
-  - Value: optional for MVP; keep empty for dry-run-only alerts truthfulness.
+  - Value: optional for MVP; alerts remain deferred from launch until provider-backed delivery is implemented and validated.
 - `RAW_FILING_CACHE_DIRECTORY`
   - Value: `/tmp/invest-like-congress/raw-filings`
 - `SENATE_COMPLIANCE_MODE`
@@ -93,7 +93,8 @@ Expected response shape includes keys:
 
 Truthfulness checks in `/api/system/status`:
 
-- `alerts.deliveryMode` is `dry-run-only`
+- `alerts.deliveryMode` is `deferred`
+- `alerts.subscriptionsApiEnabled` is `false`
 - `demoData.mode` is non-empty and reflects ingestion/fallback outcome.
 
 Open and validate core pages:

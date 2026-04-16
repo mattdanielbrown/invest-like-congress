@@ -57,6 +57,8 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 	- `render.yaml`
 - First hosted MVP runbook:
 	- [docs/operations/first-hosted-mvp-render.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/docs/operations/first-hosted-mvp-render.md)
+- Production readiness minimum runbook:
+	- [docs/operations/production-readiness-minimum.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/docs/operations/production-readiness-minimum.md)
 
 ## Worker runs
 
@@ -65,6 +67,19 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 - Alert worker: `npm run worker:alerts`
 - Demo fallback seed only: `npm run demo:seed`
 - Demo refresh (migrate + ingest + pricing): `npm run demo:refresh`
+
+## Milestone 5 scheduling baseline (Render)
+
+- Ingestion cron:
+	- Service: `congress-portfolio-ingestion-hourly`
+	- Schedule: `12 * * * *` (hourly)
+	- Command: `npm run worker:ingestion -- --mode=hourly --from-year=2019`
+- Pricing refresh cron:
+	- Service: `congress-portfolio-pricing-refresh`
+	- Schedule: `0 15,18,21 * * 1-5` (weekday intraday UTC slots)
+	- Command: `npm run worker:pricing-refresh`
+- Alert cron:
+	- Deferred from launch until provider-backed delivery is implemented and validated.
 
 ## Test run
 
@@ -77,8 +92,9 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 - Ingestion now rebuilds derived holdings and realized P/L state from verified transactions for demo-ready pages.
 - Pricing refresh updates `holding_snapshots.last_market_price` and `holding_snapshots.unrealized_profit_loss` for open positions with resolved tickers.
 - Pricing data source defaults to Stooq CSV fallback; set `MARKET_DATA_BASE_URL` and optional `MARKET_DATA_API_KEY` to use a provider endpoint.
-- Email provider integration is currently dry-run logging unless `EMAIL_PROVIDER_API_KEY` wiring is completed to a specific provider API.
-- Alerts APIs and `GET /api/system/status` explicitly label alert delivery as non-MVP dry-run until provider-backed delivery is implemented.
+- Alert delivery is explicitly deferred from launch until provider-backed delivery is implemented and validated.
+- `POST /api/alerts/subscribe`, `GET /api/alerts/subscribe`, and `POST /api/alerts/unsubscribe` are hard-gated with `503` while alerts are deferred.
+- Alert worker runs are no-op while deferred and persist run summaries with warnings for operator visibility.
 - The app and API are database-backed only. If `DATABASE_URL` is missing, pages and APIs return explicit setup-required responses.
 
 ## Ingestion runbook

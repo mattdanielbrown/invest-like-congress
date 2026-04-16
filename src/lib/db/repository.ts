@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { getDatabasePool } from "@/lib/db/pool";
+import { alertsLaunchPolicy } from "@/lib/alerts/launch-policy";
 import type { MemberQueryFilters } from "@/lib/db/schema-types";
 import type {
 	AlertSubscription,
@@ -1400,6 +1401,7 @@ async function upsertPositionChangeEvents(
 export async function replaceDerivedPortfolioState(derivedState: DerivedPortfolioState): Promise<void> {
 	const pool = getRequiredPool();
 	const client = await pool.connect();
+	const positionChangeEventsEnabled = alertsLaunchPolicy.workerDispatchEnabled;
 
 	try {
 		await client.query("BEGIN");
@@ -1417,12 +1419,16 @@ export async function replaceDerivedPortfolioState(derivedState: DerivedPortfoli
 		await deleteStaleTransactionScopedRows(
 			client,
 			"position_change_events",
-			derivedState.positionChangeEvents.map((event) => event.sourceTransactionId)
+			positionChangeEventsEnabled
+				? derivedState.positionChangeEvents.map((event) => event.sourceTransactionId)
+				: []
 		);
 		await upsertHoldingSnapshots(client, derivedState.holdingSnapshots);
 		await upsertRealizedProfitEvents(client, derivedState.realizedProfitEvents);
 		await upsertPositionStateEvents(client, derivedState.positionStateEvents);
-		await upsertPositionChangeEvents(client, derivedState.positionChangeEvents);
+		if (positionChangeEventsEnabled) {
+			await upsertPositionChangeEvents(client, derivedState.positionChangeEvents);
+		}
 		await client.query("COMMIT");
 	} catch (error) {
 		await client.query("ROLLBACK");
