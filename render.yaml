@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     autoDeploy: true
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm run start
     envVars:
       - key: DATABASE_URL
@@ -37,10 +37,10 @@ services:
         sync: false
       - key: WORKER_ALLOW_DRY_RUN
         value: "0"
-      - key: NODE_ENV
-        value: production
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"
 
 databases:
   - name: congress-portfolio-db
