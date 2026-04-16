@@ -61,7 +61,14 @@ Use these observation paths for every incident:
 
 ## 4. Post-activation verification snapshot
 
-Run this once after cron services are enabled and at least one cycle has elapsed:
+Primary command (canonical path) after cron services are enabled and at least one cycle has elapsed:
+
+- `HOSTED_BASE_URL=https://congress-portfolio-web.onrender.com DATABASE_URL='<render-postgres-connection-string>' ./scripts/ops/verify-hosted-m5.sh`
+- Expected script result:
+	- `verification_passed=true`
+	- Artifacts written to `/tmp/m5-verification-<timestamp>.*` (or `/var/tmp` fallback)
+
+Fallback manual checks (if script execution environment is unavailable):
 
 1. `curl -sS <hosted-url>/api/system/status`
 	- Expected:
