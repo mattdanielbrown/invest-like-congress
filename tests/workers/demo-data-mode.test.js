@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveDemoDataMode, shouldApplyDeterministicFallback } from "../../scripts/lib/demo-data-mode.js";
+import {
+	resolveDemoDataMode,
+	resolveDemoDataModeFromStatusSignals,
+	shouldApplyDeterministicFallback
+} from "../../scripts/lib/demo-data-mode.js";
 
 test("fallback is required when ingestion fails even if transactions exist", () => {
 	assert.equal(shouldApplyDeterministicFallback({
@@ -41,5 +45,45 @@ test("demo mode resolves to empty when no verified transactions remain", () => {
 	assert.equal(resolveDemoDataMode({
 		fallbackApplied: false,
 		verifiedTransactionCount: 0
+	}), "empty");
+});
+
+test("status-signal resolver returns deterministic fallback when only seeded data exists", () => {
+	assert.equal(resolveDemoDataModeFromStatusSignals({
+		verifiedTransactions: 3,
+		demoSeedTransactions: 3,
+		officialTransactions: 0,
+		latestIngestionRunSuccess: true,
+		latestIngestionExtractedTransactions: 0
+	}), "deterministic-fallback");
+});
+
+test("status-signal resolver returns official ingestion when only official data exists", () => {
+	assert.equal(resolveDemoDataModeFromStatusSignals({
+		verifiedTransactions: 3,
+		demoSeedTransactions: 0,
+		officialTransactions: 3,
+		latestIngestionRunSuccess: true,
+		latestIngestionExtractedTransactions: 3
+	}), "official-ingestion");
+});
+
+test("status-signal resolver returns mixed when seeded and official data co-exist", () => {
+	assert.equal(resolveDemoDataModeFromStatusSignals({
+		verifiedTransactions: 6,
+		demoSeedTransactions: 2,
+		officialTransactions: 4,
+		latestIngestionRunSuccess: true,
+		latestIngestionExtractedTransactions: 4
+	}), "mixed");
+});
+
+test("status-signal resolver returns empty when verified transaction count is zero", () => {
+	assert.equal(resolveDemoDataModeFromStatusSignals({
+		verifiedTransactions: 0,
+		demoSeedTransactions: 0,
+		officialTransactions: 0,
+		latestIngestionRunSuccess: true,
+		latestIngestionExtractedTransactions: 0
 	}), "empty");
 });

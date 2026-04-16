@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import pg from "pg";
-import { shouldApplyDeterministicFallback, resolveDemoDataMode } from "./lib/demo-data-mode.js";
+import { shouldApplyDeterministicFallback, resolveDemoDataModeFromStatusSignals } from "./lib/demo-data-mode.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
@@ -56,6 +56,41 @@ async function getVerifiedTransactionCount() {
 	}
 }
 
+async function getVerifiedDataCounts() {
+	if (!process.env.DATABASE_URL) {
+		throw new Error("DATABASE_URL is required.");
+	}
+
+	const client = new Client({ connectionString: process.env.DATABASE_URL });
+	await client.connect();
+	try {
+		const result = await client.query(
+			`SELECT
+				(SELECT COUNT(*)::int
+					FROM normalized_transactions
+					WHERE verification_status = 'verified') AS verified_transactions,
+				(SELECT COUNT(*)::int
+					FROM normalized_transactions t
+					LEFT JOIN filing_documents fd ON fd.source_document_id = t.filing_document_id
+					WHERE t.verification_status = 'verified'
+						AND fd.source_system = 'demo-seed') AS demo_seed_transactions,
+				(SELECT COUNT(*)::int
+					FROM normalized_transactions t
+					LEFT JOIN filing_documents fd ON fd.source_document_id = t.filing_document_id
+					WHERE t.verification_status = 'verified'
+						AND COALESCE(fd.source_system, '') <> 'demo-seed') AS official_transactions`
+		);
+		const row = result.rows[0] ?? {};
+		return {
+			verifiedTransactions: Number(row.verified_transactions ?? 0),
+			demoSeedTransactions: Number(row.demo_seed_transactions ?? 0),
+			officialTransactions: Number(row.official_transactions ?? 0)
+		};
+	} finally {
+		await client.end();
+	}
+}
+
 async function run() {
 	const { fromYear, toYear } = toYearBounds();
 	const ingestionRuntimeArgs = [
@@ -90,14 +125,13 @@ async function run() {
 		fallbackApplied = true;
 	}
 
-	await runCommand("node", ["scripts/run-pricing-refresh.js"]);
+	await runCommand("node", [...ingestionRuntimeArgs, "scripts/run-pricing-refresh.js"]);
 
-	const finalVerifiedTransactionCount = fallbackApplied
-		? await getVerifiedTransactionCount()
-		: verifiedTransactionCountAfterIngestion;
-	const demoDataMode = resolveDemoDataMode({
-		fallbackApplied,
-		verifiedTransactionCount: finalVerifiedTransactionCount
+	const finalVerifiedDataCounts = await getVerifiedDataCounts();
+	const demoDataMode = resolveDemoDataModeFromStatusSignals({
+		...finalVerifiedDataCounts,
+		latestIngestionRunSuccess: ingestionFailureReason === null,
+		latestIngestionExtractedTransactions: null
 	});
 
 	console.info("[demo-refresh] completed", {
@@ -105,7 +139,7 @@ async function run() {
 		toYear,
 		demoDataMode,
 		fallbackApplied,
-		verifiedTransactionCount: finalVerifiedTransactionCount,
+		counts: finalVerifiedDataCounts,
 		ingestion: {
 			success: ingestionFailureReason === null,
 			failureReason: ingestionFailureReason
