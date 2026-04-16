@@ -64,6 +64,8 @@ Use these observation paths for every incident:
 Primary command (canonical path) after cron services are enabled and at least one cycle has elapsed:
 
 - `HOSTED_BASE_URL=https://congress-portfolio-web.onrender.com DATABASE_URL='<render-postgres-connection-string>' ./scripts/ops/verify-hosted-m5.sh`
+- Preferred archive command (runs verification + copies artifacts into repo evidence):
+	- `HOSTED_BASE_URL=https://congress-portfolio-web.onrender.com DATABASE_URL='<render-postgres-connection-string>' ./scripts/ops/run-and-archive-hosted-m5.sh`
 - Expected script result:
 	- `verification_passed=true`
 	- Artifacts written to `/tmp/m5-verification-<timestamp>.*` (or `/var/tmp` fallback)

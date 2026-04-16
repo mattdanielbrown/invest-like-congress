@@ -21,7 +21,14 @@ test("hosted verification script enforces required status checks and SQL summari
 test("hosted verification runbook and readme reference the canonical script", async () => {
 	const runbook = await load("docs/operations/production-readiness-minimum.md");
 	const readme = await load("README.md");
+	const evidenceReadme = await load("docs/operations/evidence/README.md");
+	const archiveScript = await load("scripts/ops/run-and-archive-hosted-m5.sh");
 	assert.equal(runbook.includes("./scripts/ops/verify-hosted-m5.sh"), true);
+	assert.equal(runbook.includes("./scripts/ops/run-and-archive-hosted-m5.sh"), true);
 	assert.equal(runbook.includes("Fallback manual checks"), true);
 	assert.equal(readme.includes("./scripts/ops/verify-hosted-m5.sh"), true);
+	assert.equal(readme.includes("./scripts/ops/run-and-archive-hosted-m5.sh"), true);
+	assert.equal(evidenceReadme.includes("./scripts/ops/run-and-archive-hosted-m5.sh"), true);
+	assert.equal(archiveScript.includes("verify-hosted-m5.sh"), true);
+	assert.equal(archiveScript.includes("archived_dir="), true);
 });

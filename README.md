@@ -82,6 +82,8 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 	- Deferred from launch until provider-backed delivery is implemented and validated.
 - One-command hosted verification snapshot:
 	- `HOSTED_BASE_URL=https://congress-portfolio-web.onrender.com DATABASE_URL='<render-postgres-connection-string>' ./scripts/ops/verify-hosted-m5.sh`
+- One-command hosted verification + evidence archive:
+	- `HOSTED_BASE_URL=https://congress-portfolio-web.onrender.com DATABASE_URL='<render-postgres-connection-string>' ./scripts/ops/run-and-archive-hosted-m5.sh`
 
 ## Test run
 
