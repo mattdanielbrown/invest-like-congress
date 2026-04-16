@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: congress-portfolio-web
+    runtime: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: congress-portfolio-db
+          property: connectionString
+      - key: APPLICATION_BASE_URL
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        value: alerts@congress-portfolio.local
+      - key: EMAIL_PROVIDER_API_KEY
+        sync: false
+      - key: RAW_FILING_CACHE_DIRECTORY
+        value: /tmp/invest-like-congress/raw-filings
+      - key: SENATE_COMPLIANCE_MODE
+        value: strict-non-commercial
+      - key: SENATE_REPORT_DATA_PATH
+        value: /search/report/data/
+      - key: INGESTION_USER_AGENT
+        value: invest-like-congress/1.0 (non-commercial, transparency research)
+      - key: INGESTION_RETRY_MAX_RETRIES
+        value: "3"
+      - key: INGESTION_RETRY_DELAY_MS
+        value: "800"
+      - key: INGESTION_RATE_LIMIT_PAUSE_MS
+        value: "300"
+      - key: MARKET_DATA_BASE_URL
+        sync: false
+      - key: MARKET_DATA_API_KEY
+        sync: false
+      - key: WORKER_ALLOW_DRY_RUN
+        value: "0"
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+
+databases:
+  - name: congress-portfolio-db
+    plan: basic-1gb
+    databaseName: congress_portfolio
+    user: congress_portfolio

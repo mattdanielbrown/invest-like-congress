@@ -51,6 +51,13 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 5. Start web app:
 	- `npm run dev`
 
+## Hosted deployment (Milestone 4)
+
+- Render blueprint:
+	- `render.yaml`
+- First hosted MVP runbook:
+	- [docs/operations/first-hosted-mvp-render.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/docs/operations/first-hosted-mvp-render.md)
+
 ## Worker runs
 
 - Ingestion: `npm run worker:ingestion`
