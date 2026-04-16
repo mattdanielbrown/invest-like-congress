@@ -67,6 +67,8 @@ Primary command (canonical path) after cron services are enabled and at least on
 - Expected script result:
 	- `verification_passed=true`
 	- Artifacts written to `/tmp/m5-verification-<timestamp>.*` (or `/var/tmp` fallback)
+	- Copy artifacts into the permanent evidence path:
+		- `docs/operations/evidence/milestone-5/<YYYY-MM-DD>/`
 
 Fallback manual checks (if script execution environment is unavailable):
 
