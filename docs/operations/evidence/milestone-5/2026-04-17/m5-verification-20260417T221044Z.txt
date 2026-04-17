@@ -1,0 +1,14 @@
+Milestone 5 Hosted Verification
+Timestamp (UTC): 20260417T221044Z
+Hosted URL: https://congress-portfolio-web.onrender.com
+Status URL: https://congress-portfolio-web.onrender.com/api/system/status
+alerts.launchState=deferred
+alerts.subscriptionsApiEnabled=false
+alerts.workerDispatchEnabled=false
+healthSignals.pendingAlertEventCount=0
+healthSignals.minutesSinceLastIngestion=58
+healthSignals.minutesSinceLastPricingRefresh=70
+latestIngestionRun.success=true
+latestPricingRefreshRun.success=true
+latest_ingestion_row=5d7bece1-4b30-443a-9790-2d42304500f1	hourly	2026-04-17 21:12:04.107+00	2026-04-17 21:12:10.558+00	t
+latest_pricing_refresh_row=pricing-refresh	d10f9f65-7adc-4770-ba9f-95a25e501c19	2026-04-17 21:00:05.208+00	2026-04-17 21:00:07.012+00	t
