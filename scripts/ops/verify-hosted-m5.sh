@@ -53,8 +53,50 @@ run_sql() {
 		return 0
 	fi
 
-	echo "error: neither psql nor docker is available for SQL verification." >&2
-	echo "recovery: install psql locally or install/start Docker, then re-run this script." >&2
+	if SQL_QUERY="$sql" DATABASE_URL="$DATABASE_URL_INPUT" node --input-type=module <<'NODE'
+import pgPackage from 'pg';
+const { Client } = pgPackage;
+
+const runQuery = async (enableSsl) => {
+	const client = new Client({
+		connectionString: process.env.DATABASE_URL,
+		ssl: enableSsl ? { rejectUnauthorized: false } : undefined
+	});
+	await client.connect();
+	try {
+		return await client.query(process.env.SQL_QUERY);
+	} finally {
+		await client.end();
+	}
+};
+
+let result;
+try {
+	result = await runQuery(false);
+} catch (error) {
+	const message = String(error?.message ?? '');
+	const needsSsl = message.includes('SSL/TLS required') || message.includes('SSL off');
+	if (!needsSsl) {
+		throw error;
+	}
+	result = await runQuery(true);
+}
+
+try {
+	for (const row of result.rows) {
+		const output = Object.values(row).map((value) => (value === null ? '' : String(value)));
+		console.log(output.join('\t'));
+	}
+} catch (error) {
+	throw error;
+}
+NODE
+	then
+		return 0
+	fi
+
+	echo "error: SQL verification requires one of: psql, docker+postgres image, or node with the pg dependency." >&2
+	echo "recovery: install psql, install/start Docker, or run npm install to ensure node_modules/pg is available, then re-run this script." >&2
 	exit 1
 }
 
