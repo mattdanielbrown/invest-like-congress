@@ -1,0 +1,19 @@
+{
+  "timestampUtc": "2026-04-21T10:56:27.571Z",
+  "hostedBaseUrl": "https://congress-portfolio-web.onrender.com",
+  "statusUrl": "https://congress-portfolio-web.onrender.com/api/system/status",
+  "statusChecks": {
+    "alertsLaunchState": "deferred",
+    "subscriptionsApiEnabled": false,
+    "workerDispatchEnabled": false,
+    "pendingAlertEventCount": 0,
+    "minutesSinceLastIngestion": 44,
+    "minutesSinceLastPricingRefresh": 836,
+    "latestIngestionRunSuccess": true,
+    "latestPricingRefreshRunSuccess": true
+  },
+  "latestRows": {
+    "ingestion": "c1f8ab63-8f6d-42cf-ab76-3644fb40c1ba\thourly\tTue Apr 21 2026 05:12:04 GMT-0500 (Central Daylight Time)\tTue Apr 21 2026 05:12:11 GMT-0500 (Central Daylight Time)\ttrue",
+    "pricingRefresh": "pricing-refresh\t450df5b9-d7c4-40da-a131-e1fd9defbfbf\tMon Apr 20 2026 16:00:04 GMT-0500 (Central Daylight Time)\tMon Apr 20 2026 16:00:06 GMT-0500 (Central Daylight Time)\ttrue"
+  }
+}
