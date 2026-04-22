@@ -1,4 +1,4 @@
-import { createDatabaseClient } from "./lib/database-connection-config.js";
+import { connectDatabaseClient } from "./lib/database-connection-config.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
@@ -315,8 +315,7 @@ async function run() {
 		process.exit(1);
 	}
 
-	const client = createDatabaseClient(process.env.DATABASE_URL);
-	await client.connect();
+	const client = await connectDatabaseClient(process.env.DATABASE_URL);
 	try {
 		const seedRequired = await shouldSeedDemoData(client);
 		if (!seedRequired) {

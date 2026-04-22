@@ -36,3 +36,31 @@ export function buildDatabaseConnectionConfig(databaseUrl) {
 export function createDatabaseClient(databaseUrl) {
 	return new pg.Client(buildDatabaseConnectionConfig(databaseUrl));
 }
+
+function requiresSsl(error) {
+	const message = String(error?.message ?? "");
+	return message.includes("SSL/TLS required") || message.includes("SSL off");
+}
+
+export async function connectDatabaseClient(databaseUrl) {
+	const initialConfig = buildDatabaseConnectionConfig(databaseUrl);
+	let client = new pg.Client(initialConfig);
+
+	try {
+		await client.connect();
+		return client;
+	} catch (error) {
+		await client.end().catch(() => {});
+
+		if (initialConfig.ssl || !requiresSsl(error)) {
+			throw error;
+		}
+
+		client = new pg.Client({
+			...initialConfig,
+			ssl: { rejectUnauthorized: false }
+		});
+		await client.connect();
+		return client;
+	}
+}

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDatabaseClient } from "./lib/database-connection-config.js";
+import { connectDatabaseClient } from "./lib/database-connection-config.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
@@ -20,8 +20,7 @@ async function run() {
 		.filter((fileName) => /^\d+_.*\.sql$/.test(fileName))
 		.sort((left, right) => left.localeCompare(right));
 
-	const client = createDatabaseClient(process.env.DATABASE_URL);
-	await client.connect();
+	const client = await connectDatabaseClient(process.env.DATABASE_URL);
 
 	try {
 		await client.query("SELECT pg_advisory_lock(94741322)");
