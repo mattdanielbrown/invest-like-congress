@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-import pg from "pg";
 import { shouldApplyDeterministicFallback, resolveDemoDataModeFromStatusSignals } from "./lib/demo-data-mode.js";
+import { createDatabaseClient } from "./lib/database-connection-config.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
-const { Client } = pg;
 
 function runCommand(command, args) {
 	return new Promise((resolve, reject) => {
@@ -42,7 +41,7 @@ async function getVerifiedTransactionCount() {
 		throw new Error("DATABASE_URL is required.");
 	}
 
-	const client = new Client({ connectionString: process.env.DATABASE_URL });
+	const client = createDatabaseClient(process.env.DATABASE_URL);
 	await client.connect();
 	try {
 		const result = await client.query(
@@ -61,7 +60,7 @@ async function getVerifiedDataCounts() {
 		throw new Error("DATABASE_URL is required.");
 	}
 
-	const client = new Client({ connectionString: process.env.DATABASE_URL });
+	const client = createDatabaseClient(process.env.DATABASE_URL);
 	await client.connect();
 	try {
 		const result = await client.query(
