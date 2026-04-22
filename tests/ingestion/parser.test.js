@@ -66,3 +66,28 @@ test("parseOfficialRecord accepts valid candidates and quarantines invalid ones 
 		}
 	]);
 });
+
+test("parseOfficialRecord preserves a document-level empty parse reason", () => {
+	const result = parseOfficialRecord(
+		{
+			sourceSystem: "house-disclosures",
+			sourceDocumentId: "house-2026-image-only",
+			documentUrl: "https://example.com/doc.pdf",
+			filedAt: "2026-03-21",
+			memberDisplayName: "Jane Example",
+			chamber: "house",
+			year: 2026
+		},
+		[],
+		{
+			emptyDocumentReason: "pdf-image-only-no-text-layer"
+		}
+	);
+
+	assert.deepEqual(result.quarantinedRows, [
+		{
+			sourceDocumentId: "house-2026-image-only",
+			reason: "pdf-image-only-no-text-layer"
+		}
+	]);
+});
