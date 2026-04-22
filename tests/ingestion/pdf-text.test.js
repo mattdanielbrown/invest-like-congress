@@ -34,3 +34,17 @@ test("detectPdfExtractionIssue accepts readable extracted text", () => {
 
 	assert.equal(detectPdfExtractionIssue(new Uint8Array(fakeTextPdf), readableText), null);
 });
+
+test("detectPdfExtractionIssue flags non-image PDFs whose extracted text lacks PTR markers", () => {
+	const fakeTextPdf = Buffer.from("%PDF-1.5\n/Font\nBT\nET\n", "latin1");
+	const unreadableText = [
+		"ZGkP qTrm sXY kuH XXT",
+		"DDDDDDH nhs XxO FEq",
+		"Bfb Yey Kkk tAp BdP"
+	].join("\n");
+
+	assert.equal(
+		detectPdfExtractionIssue(new Uint8Array(fakeTextPdf), unreadableText),
+		"pdf-text-extraction-unreadable"
+	);
+});
