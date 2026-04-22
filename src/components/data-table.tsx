@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { MemberHoldingsRow } from "@/lib/domain/types";
+import { formatTimestampUtc } from "@/lib/presentation/date-format";
 
 interface DataTableProps {
 	rows: MemberHoldingsRow[];
@@ -31,7 +32,7 @@ export function DataTable({ rows }: DataTableProps) {
 							<td>{row.holdingsCount}</td>
 							<td>${row.realizedProfitLossTotal.toFixed(2)}</td>
 							<td>${row.unrealizedProfitLossTotal.toFixed(2)}</td>
-							<td>{new Date(row.lastVerifiedUpdateAt).toLocaleString()}</td>
+							<td>{formatTimestampUtc(row.lastVerifiedUpdateAt)}</td>
 						</tr>
 					))}
 				</tbody>
