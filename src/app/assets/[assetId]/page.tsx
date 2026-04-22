@@ -1,6 +1,7 @@
 import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import { getAssetActivityById } from "@/lib/domain/asset-service";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
+import { formatTimestampUtc } from "@/lib/presentation/date-format";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,7 @@ export default async function AssetDetailPage({ params }: AssetDetailPageProps) 
 					<dt>Closed Positions</dt>
 					<dd>{row.closedPositionCount}</dd>
 					<dt>Latest Activity</dt>
-					<dd>{row.latestActivityAt ?? "n/a"}</dd>
+					<dd>{formatTimestampUtc(row.latestActivityAt)}</dd>
 				</dl>
 			</article>
 		</section>
