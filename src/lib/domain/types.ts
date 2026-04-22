@@ -128,6 +128,7 @@ export interface MemberOpenPositionRow {
 }
 
 export interface MemberPortfolioSummary {
+	member: Member;
 	memberId: string;
 	realizedProfitLossTotal: number;
 	unrealizedProfitLossTotal: number;

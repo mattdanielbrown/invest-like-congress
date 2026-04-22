@@ -430,36 +430,50 @@ export async function listAssetsWithActivity(limit = 200): Promise<AssetActivity
 	}));
 }
 
-export async function getMemberPortfolioSummary(memberId: string): Promise<MemberPortfolioSummary> {
+export async function getMemberPortfolioSummary(memberId: string): Promise<MemberPortfolioSummary | null> {
 	const pool = getRequiredPool();
 
-	const realizedResult = await pool.query(
-		`SELECT COALESCE(SUM(realized_profit_loss), 0)::float8 AS realized_profit_loss_total
-		FROM realized_profit_events
-		WHERE member_id = $1`,
+	const memberResult = await pool.query(
+		`SELECT id, full_name, party, state_code, chamber
+		FROM members
+		WHERE id = $1
+		LIMIT 1`,
 		[memberId]
 	);
-	const realizedProfitLossTotal = Number(realizedResult.rows[0]?.realized_profit_loss_total ?? 0);
+	if ((memberResult.rowCount ?? 0) === 0) {
+		return null;
+	}
 
-	const holdingsResult = await pool.query(
-		`SELECT
-			h.asset_id,
-			h.shares_held,
-			h.average_cost_basis_per_share,
-			h.last_market_price,
-			COALESCE(h.unrealized_profit_loss, 0)::float8 AS unrealized_profit_loss,
-			a.display_name,
-			a.ticker_symbol,
-			a.asset_type,
-			a.is_symbol_resolved
-		FROM holding_snapshots h
-		JOIN assets a ON a.id = h.asset_id
-		WHERE h.member_id = $1
-			AND h.verification_status = 'verified'
-			AND h.status = 'open'
-		ORDER BY a.display_name ASC`,
-		[memberId]
-	);
+	const memberRow = memberResult.rows[0];
+
+	const [realizedResult, holdingsResult] = await Promise.all([
+		pool.query(
+			`SELECT COALESCE(SUM(realized_profit_loss), 0)::float8 AS realized_profit_loss_total
+			FROM realized_profit_events
+			WHERE member_id = $1`,
+			[memberId]
+		),
+		pool.query(
+			`SELECT
+				h.asset_id,
+				h.shares_held,
+				h.average_cost_basis_per_share,
+				h.last_market_price,
+				COALESCE(h.unrealized_profit_loss, 0)::float8 AS unrealized_profit_loss,
+				a.display_name,
+				a.ticker_symbol,
+				a.asset_type,
+				a.is_symbol_resolved
+			FROM holding_snapshots h
+			JOIN assets a ON a.id = h.asset_id
+			WHERE h.member_id = $1
+				AND h.verification_status = 'verified'
+				AND h.status = 'open'
+			ORDER BY a.display_name ASC`,
+			[memberId]
+		)
+	]);
+	const realizedProfitLossTotal = Number(realizedResult.rows[0]?.realized_profit_loss_total ?? 0);
 
 	const openPositions = holdingsResult.rows.map((row) => {
 		const remainingShares = Number(row.shares_held ?? 0);
@@ -487,6 +501,13 @@ export async function getMemberPortfolioSummary(memberId: string): Promise<Membe
 	const currentHeldAssetsValue = openPositions.reduce((sum, row) => sum + row.currentPositionValue, 0);
 
 	return {
+		member: {
+			id: memberRow.id,
+			fullName: memberRow.full_name,
+			party: memberRow.party,
+			stateCode: memberRow.state_code,
+			chamber: memberRow.chamber
+		},
 		memberId,
 		realizedProfitLossTotal,
 		unrealizedProfitLossTotal,

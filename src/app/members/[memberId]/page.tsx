@@ -1,5 +1,6 @@
 import { DatabaseSetupRequired } from "@/components/database-setup-required";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getMemberPortfolioSummaryById, getMemberTransactions } from "@/lib/domain/member-service";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 
@@ -68,12 +69,15 @@ export default async function MemberDetailPage({ params }: MemberDetailPageProps
 		}
 		throw error;
 	}
+	if (!summary) {
+		notFound();
+	}
 
 	return (
 		<section>
 			<h2>Member Portfolio and Transactions</h2>
 			<p>
-				Viewing verified transaction history for <strong>{formatTextCell(memberId)}</strong>.
+				Viewing verified transaction history for <strong>{formatTextCell(summary.member.fullName)}</strong>.
 			</p>
 			<article>
 				<h3>All-Time Portfolio Summary While in Office</h3>
