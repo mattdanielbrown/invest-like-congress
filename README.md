@@ -55,6 +55,8 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 
 - Render blueprint:
 	- `render.yaml`
+- Demo refresh operator checklist:
+	- [docs/operations/demo-refresh-checklist.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/docs/operations/demo-refresh-checklist.md)
 - First hosted MVP runbook:
 	- [docs/operations/first-hosted-mvp-render.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/docs/operations/first-hosted-mvp-render.md)
 - Production readiness minimum runbook:
@@ -121,24 +123,18 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 
 ## Demo refresh checklist (Milestone 3)
 
-1. Reset to an empty local DB and apply schema
-	- `docker compose down -v`
-	- `docker compose up -d`
-	- `npm run db:setup`
-2. Run the end-to-end demo refresh
-		- `npm run demo:refresh`
-		- Behavior:
-			- Official ingestion is attempted first.
-			- Deterministic fallback seed is applied automatically when ingestion fails or yields `0` verified transactions.
-		- If local scripts and the dev server appear to disagree about the active database target:
-			- `npm run doctor:env`
-3. Verify demo usability
-		- `npm run dev`
-		- Check `GET /api/system/status` and confirm `demoData.mode`.
-		- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`.
-4. Verify fallback path explicitly
-	- `DEMO_FROM_YEAR=2100 DEMO_TO_YEAR=2100 npm run demo:refresh`
-	- Re-check `GET /api/system/status` and confirm `demoData.mode` reports fallback.
+Use the dedicated runbook:
+
+- [docs/operations/demo-refresh-checklist.md](/Users/mattbrown/Development/AI/Platforms/Web/OpenAI/Codex/Projects/stock-portfolios-of-congress/docs/operations/demo-refresh-checklist.md)
+
+Key commands:
+
+- `npm run doctor:env`
+- `npm run db:setup`
+- `npm run demo:refresh`
+- `npm run dev`
+- `curl -sS http://localhost:3000/api/system/status`
+- `DEMO_FROM_YEAR=2100 DEMO_TO_YEAR=2100 npm run demo:refresh`
 
 ## Worker behavior
 
