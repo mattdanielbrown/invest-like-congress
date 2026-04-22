@@ -1,3 +1,4 @@
+import { isAdminSurfaceEnabled } from "@/lib/admin/admin-surface-policy";
 import { getFilingProvenance } from "@/lib/db/repository";
 import { databaseSetupRequired, internalError, notFound, okJson } from "@/lib/api/http";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
@@ -10,6 +11,10 @@ interface RouteContext {
 
 export async function GET(_request: Request, context: RouteContext) {
 	try {
+		if (!isAdminSurfaceEnabled()) {
+			return notFound("Not found.");
+		}
+
 		const { filingDocumentId } = await context.params;
 		const row = await getFilingProvenance(filingDocumentId);
 		if (!row) {

@@ -12,7 +12,7 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 	- Member holdings list and filter controls
 	- Member transaction detail page
 	- Asset activity page
-	- Admin quarantine page
+	- Internal admin quarantine page (disabled by default for the public MVP)
 - API endpoints:
 	- `GET /api/members`
 	- `GET /api/members/:memberId/transactions`
@@ -92,6 +92,7 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 ## Important v1 notes
 
 - Public data is verified-only; unresolved rows are quarantined.
+- Internal admin routes are disabled by default for the public MVP. Set `ADMIN_SURFACES_ENABLED=1` only for intentional internal review workflows.
 - Senate ingestion is operated in strict non-commercial mode with explicit source attribution requirements.
 - Ingestion now rebuilds derived holdings and realized P/L state from verified transactions for demo-ready pages.
 - Pricing refresh updates `holding_snapshots.last_market_price` and `holding_snapshots.unrealized_profit_loss` for open positions with resolved tickers.
@@ -125,14 +126,16 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 	- `docker compose up -d`
 	- `npm run db:setup`
 2. Run the end-to-end demo refresh
-	- `npm run demo:refresh`
-	- Behavior:
-		- Official ingestion is attempted first.
-		- Deterministic fallback seed is applied automatically when ingestion fails or yields `0` verified transactions.
+		- `npm run demo:refresh`
+		- Behavior:
+			- Official ingestion is attempted first.
+			- Deterministic fallback seed is applied automatically when ingestion fails or yields `0` verified transactions.
+		- If local scripts and the dev server appear to disagree about the active database target:
+			- `npm run doctor:env`
 3. Verify demo usability
-	- `npm run dev`
-	- Check `GET /api/system/status` and confirm `demoData.mode`.
-	- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`.
+		- `npm run dev`
+		- Check `GET /api/system/status` and confirm `demoData.mode`.
+		- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`.
 4. Verify fallback path explicitly
 	- `DEMO_FROM_YEAR=2100 DEMO_TO_YEAR=2100 npm run demo:refresh`
 	- Re-check `GET /api/system/status` and confirm `demoData.mode` reports fallback.
@@ -146,6 +149,10 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 
 - Empty UI with setup-required message:
 	- `DATABASE_URL` is missing or invalid.
+- Demo refresh and `/api/system/status` disagree about latest run IDs or timestamps:
+	- `npm run doctor:env`
+	- Confirm `.env.local` and `.env` are pointing at the same intended database target.
+	- Remember that `.env.local` overrides `.env` for both the Next.js app and the local scripts.
 - Empty UI with no setup-required message:
 	- DB is connected but ingest may not have run yet.
 	- Run `npm run demo:refresh` and recheck counts in the runbook.
