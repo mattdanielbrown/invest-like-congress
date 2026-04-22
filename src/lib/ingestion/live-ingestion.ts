@@ -5,7 +5,7 @@ import { fetchWithRetry, rateLimitPause } from "@/lib/ingestion/http-client";
 import { cacheRawDocument } from "@/lib/ingestion/raw-cache";
 import { parseHousePtrText } from "@/lib/ingestion/parsers/house-ptr-parser";
 import { parseSenatePtrHtml } from "@/lib/ingestion/parsers/senate-ptr-parser";
-import { extractTextFromPdfBytes } from "@/lib/ingestion/parsers/pdf-text";
+import { detectPdfExtractionIssue, extractTextFromPdfBytes } from "@/lib/ingestion/parsers/pdf-text";
 import { fetchOfficialPtrRecords } from "@/lib/ingestion/official-sources";
 import { parseOfficialRecord } from "@/lib/ingestion/parser";
 import { refreshDerivedPortfolioState } from "@/lib/ingestion/refresh-derived-portfolio-state";
@@ -43,6 +43,11 @@ interface IngestionRunSummary {
 	cursorKey: string;
 }
 
+interface ParsedCandidateResult {
+	candidates: ParsedTransactionCandidate[];
+	emptyDocumentReason?: string;
+}
+
 function detectContentType(response: Response, bytes: Uint8Array): "html" | "pdf" | "other" {
 	const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
 	if (contentType.includes("html") || contentType.includes("text/html")) {
@@ -54,15 +59,29 @@ function detectContentType(response: Response, bytes: Uint8Array): "html" | "pdf
 	return "other";
 }
 
-function parseCandidates(contentType: "html" | "pdf" | "other", rawBytes: Uint8Array): ParsedTransactionCandidate[] {
+function parseCandidates(contentType: "html" | "pdf" | "other", rawBytes: Uint8Array): ParsedCandidateResult {
 	if (contentType === "html") {
-		return parseSenatePtrHtml(Buffer.from(rawBytes).toString("utf8"));
+		return {
+			candidates: parseSenatePtrHtml(Buffer.from(rawBytes).toString("utf8"))
+		};
 	}
 	if (contentType === "pdf") {
 		const extractedText = extractTextFromPdfBytes(rawBytes);
-		return parseHousePtrText(extractedText);
+		const extractionIssue = detectPdfExtractionIssue(rawBytes, extractedText);
+		if (extractionIssue) {
+			return {
+				candidates: [],
+				emptyDocumentReason: extractionIssue
+			};
+		}
+
+		return {
+			candidates: parseHousePtrText(extractedText)
+		};
 	}
-	return [];
+	return {
+		candidates: []
+	};
 }
 
 function getCursorKey(options: RunIngestionOptions): string {
@@ -118,8 +137,10 @@ export async function runLiveIngestion(options: RunIngestionOptions): Promise<In
 				contentLength: cachedDocument.contentLength
 			});
 
-			const candidates = parseCandidates(detectedType, rawBytes);
-			const parsedRecord = parseOfficialRecord(record, candidates);
+			const parseResult = parseCandidates(detectedType, rawBytes);
+			const parsedRecord = parseOfficialRecord(record, parseResult.candidates, {
+				emptyDocumentReason: parseResult.emptyDocumentReason
+			});
 
 			if (parsedRecord.quarantinedRows.length > 0) {
 				quarantinedDocuments += 1;

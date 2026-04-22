@@ -69,7 +69,11 @@ function getCandidateFailureReason(candidate: ParsedTransactionCandidate): strin
 	return null;
 }
 
-export function parseOfficialRecord(record: OfficialFilingRecord, candidates: ParsedTransactionCandidate[]): ParsedFilingBatch {
+export function parseOfficialRecord(
+	record: OfficialFilingRecord,
+	candidates: ParsedTransactionCandidate[],
+	options: { emptyDocumentReason?: string } = {}
+): ParsedFilingBatch {
 	const documentChecksum = createHash("sha256")
 		.update(JSON.stringify({
 			record,
@@ -85,7 +89,7 @@ export function parseOfficialRecord(record: OfficialFilingRecord, candidates: Pa
 	if (candidates.length === 0) {
 		quarantinedRows.push({
 			sourceDocumentId: record.sourceDocumentId,
-			reason: "no-transactions-parsed"
+			reason: options.emptyDocumentReason ?? "no-transactions-parsed"
 		});
 	}
 
