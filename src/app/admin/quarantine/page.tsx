@@ -1,10 +1,16 @@
+import { notFound } from "next/navigation";
 import { DatabaseSetupRequired } from "@/components/database-setup-required";
+import { isAdminSurfaceEnabled } from "@/lib/admin/admin-surface-policy";
 import { isDatabaseNotConfiguredError } from "@/lib/db/errors";
 import { listQuarantinedTransactions } from "@/lib/db/repository";
 
 export const dynamic = "force-dynamic";
 
 export default async function QuarantinePage() {
+	if (!isAdminSurfaceEnabled()) {
+		notFound();
+	}
+
 	let rows;
 	try {
 		rows = await listQuarantinedTransactions(200);

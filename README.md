@@ -12,7 +12,7 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 	- Member holdings list and filter controls
 	- Member transaction detail page
 	- Asset activity page
-	- Admin quarantine page
+	- Internal admin quarantine page (disabled by default for the public MVP)
 - API endpoints:
 	- `GET /api/members`
 	- `GET /api/members/:memberId/transactions`
@@ -92,6 +92,7 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 ## Important v1 notes
 
 - Public data is verified-only; unresolved rows are quarantined.
+- Internal admin routes are disabled by default for the public MVP. Set `ADMIN_SURFACES_ENABLED=1` only for intentional internal review workflows.
 - Senate ingestion is operated in strict non-commercial mode with explicit source attribution requirements.
 - Ingestion now rebuilds derived holdings and realized P/L state from verified transactions for demo-ready pages.
 - Pricing refresh updates `holding_snapshots.last_market_price` and `holding_snapshots.unrealized_profit_loss` for open positions with resolved tickers.
