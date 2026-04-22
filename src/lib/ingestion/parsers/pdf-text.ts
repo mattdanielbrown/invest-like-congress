@@ -19,8 +19,21 @@ function hasUsableExtractedText(extractedText: string): boolean {
 		.replaceAll(/[^\x20-\x7e]+/g, " ")
 		.replaceAll(/\s+/g, " ")
 		.trim();
+
+	if (!normalized) {
+		return false;
+	}
+
 	const wordMatches = normalized.match(/[A-Za-z]{3,}/g) ?? [];
-	return wordMatches.length >= 8;
+	if (wordMatches.length < 8) {
+		return false;
+	}
+
+	const hasTransactionKeyword = /(periodic transaction report|purchase|sale|asset|issuer|ticker|owner)/i.test(normalized);
+	const hasDatePattern = /\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/.test(normalized);
+	const hasAmountPattern = /\$\s*[\d,]+(?:\s*-\s*\$?\s*[\d,]+)?/.test(normalized);
+
+	return hasTransactionKeyword && (hasDatePattern || hasAmountPattern);
 }
 
 export function extractTextFromPdfBytes(pdfBytes: Uint8Array): string {
