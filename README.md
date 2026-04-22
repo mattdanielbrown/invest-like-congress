@@ -125,14 +125,16 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 	- `docker compose up -d`
 	- `npm run db:setup`
 2. Run the end-to-end demo refresh
-	- `npm run demo:refresh`
-	- Behavior:
-		- Official ingestion is attempted first.
-		- Deterministic fallback seed is applied automatically when ingestion fails or yields `0` verified transactions.
+		- `npm run demo:refresh`
+		- Behavior:
+			- Official ingestion is attempted first.
+			- Deterministic fallback seed is applied automatically when ingestion fails or yields `0` verified transactions.
+		- If local scripts and the dev server appear to disagree about the active database target:
+			- `npm run doctor:env`
 3. Verify demo usability
-	- `npm run dev`
-	- Check `GET /api/system/status` and confirm `demoData.mode`.
-	- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`.
+		- `npm run dev`
+		- Check `GET /api/system/status` and confirm `demoData.mode`.
+		- Visit `/`, `/members/<member-id>`, `/assets/<asset-id>`.
 4. Verify fallback path explicitly
 	- `DEMO_FROM_YEAR=2100 DEMO_TO_YEAR=2100 npm run demo:refresh`
 	- Re-check `GET /api/system/status` and confirm `demoData.mode` reports fallback.
@@ -146,6 +148,10 @@ Future ChatGPT 5.4 and Codex work for this repository should follow the AI-first
 
 - Empty UI with setup-required message:
 	- `DATABASE_URL` is missing or invalid.
+- Demo refresh and `/api/system/status` disagree about latest run IDs or timestamps:
+	- `npm run doctor:env`
+	- Confirm `.env.local` and `.env` are pointing at the same intended database target.
+	- Remember that `.env.local` overrides `.env` for both the Next.js app and the local scripts.
 - Empty UI with no setup-required message:
 	- DB is connected but ingest may not have run yet.
 	- Run `npm run demo:refresh` and recheck counts in the runbook.
