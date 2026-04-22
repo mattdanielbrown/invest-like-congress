@@ -40,6 +40,18 @@ ARTIFACT_BASE="${ARTIFACT_DIR}/m5-verification-${TIMESTAMP}"
 ARTIFACT_TEXT="${ARTIFACT_BASE}.txt"
 ARTIFACT_JSON="${ARTIFACT_BASE}.json"
 STATUS_JSON="${ARTIFACT_BASE}.status.json"
+DOCKER_FAILURE_NOTE=""
+
+normalize_sql_success_token() {
+	case "${1:-}" in
+		t|true)
+			printf 'true'
+			;;
+		*)
+			printf 'false'
+			;;
+	esac
+}
 
 run_sql() {
 	local sql="$1"
@@ -49,53 +61,22 @@ run_sql() {
 	fi
 
 	if command -v docker >/dev/null 2>&1; then
-		docker run --rm -e DATABASE_URL="$DATABASE_URL_INPUT" postgres:18 psql "$DATABASE_URL_INPUT" -v ON_ERROR_STOP=1 -At -F $'\t' -c "$sql"
-		return 0
+		if docker run --rm -e DATABASE_URL="$DATABASE_URL_INPUT" postgres:18 psql "$DATABASE_URL_INPUT" -v ON_ERROR_STOP=1 -At -F $'\t' -c "$sql"; then
+			return 0
+		fi
+
+		DOCKER_FAILURE_NOTE="docker_sql_backend_failed=true"
 	fi
 
-	if SQL_QUERY="$sql" DATABASE_URL="$DATABASE_URL_INPUT" node --input-type=module <<'NODE'
-import pgPackage from 'pg';
-const { Client } = pgPackage;
-
-const runQuery = async (enableSsl) => {
-	const client = new Client({
-		connectionString: process.env.DATABASE_URL,
-		ssl: enableSsl ? { rejectUnauthorized: false } : undefined
-	});
-	await client.connect();
-	try {
-		return await client.query(process.env.SQL_QUERY);
-	} finally {
-		await client.end();
-	}
-};
-
-let result;
-try {
-	result = await runQuery(false);
-} catch (error) {
-	const message = String(error?.message ?? '');
-	const needsSsl = message.includes('SSL/TLS required') || message.includes('SSL off');
-	if (!needsSsl) {
-		throw error;
-	}
-	result = await runQuery(true);
-}
-
-try {
-	for (const row of result.rows) {
-		const output = Object.values(row).map((value) => (value === null ? '' : String(value)));
-		console.log(output.join('\t'));
-	}
-} catch (error) {
-	throw error;
-}
-NODE
+	if SQL_QUERY="$sql" DATABASE_URL="$DATABASE_URL_INPUT" node ./scripts/ops/run-sql-verification-query.js
 	then
 		return 0
 	fi
 
 	echo "error: SQL verification requires one of: psql, docker+postgres image, or node with the pg dependency." >&2
+	if [ -n "$DOCKER_FAILURE_NOTE" ]; then
+		echo "detail: docker was detected but could not execute the SQL verification command; falling back also failed." >&2
+	fi
 	echo "recovery: install psql, install/start Docker, or run npm install to ensure node_modules/pg is available, then re-run this script." >&2
 	exit 1
 }
@@ -147,14 +128,16 @@ fi
 
 INGESTION_SUCCESS="$(printf '%s' "$LATEST_INGESTION_ROW" | awk -F $'\t' '{print $5}')"
 PRICING_SUCCESS="$(printf '%s' "$LATEST_PRICING_ROW" | awk -F $'\t' '{print $5}')"
+NORMALIZED_LATEST_INGESTION_SUCCESS="$(normalize_sql_success_token "$INGESTION_SUCCESS")"
+NORMALIZED_LATEST_PRICING_SUCCESS="$(normalize_sql_success_token "$PRICING_SUCCESS")"
 
-if [ "$INGESTION_SUCCESS" != "t" ] && [ "$INGESTION_SUCCESS" != "true" ]; then
+if [ "$NORMALIZED_LATEST_INGESTION_SUCCESS" != "true" ]; then
 	echo "error: latest ingestion summary is not successful: ${LATEST_INGESTION_ROW}" >&2
 	echo "recovery: investigate ingestion failure, run manual ingestion, then re-run verification." >&2
 	exit 1
 fi
 
-if [ "$PRICING_SUCCESS" != "t" ] && [ "$PRICING_SUCCESS" != "true" ]; then
+if [ "$NORMALIZED_LATEST_PRICING_SUCCESS" != "true" ]; then
 	echo "error: latest pricing-refresh summary is not successful: ${LATEST_PRICING_ROW}" >&2
 	echo "recovery: investigate pricing refresh failure, run manual pricing refresh, then re-run verification." >&2
 	exit 1
@@ -188,32 +171,11 @@ MINS_INGESTION="$MINS_INGESTION" \
 MINS_PRICING="$MINS_PRICING" \
 LATEST_INGESTION_SUCCESS="$LATEST_INGESTION_SUCCESS" \
 LATEST_PRICING_SUCCESS="$LATEST_PRICING_SUCCESS" \
+NORMALIZED_LATEST_INGESTION_SUCCESS="$NORMALIZED_LATEST_INGESTION_SUCCESS" \
+NORMALIZED_LATEST_PRICING_SUCCESS="$NORMALIZED_LATEST_PRICING_SUCCESS" \
 LATEST_INGESTION_ROW="$LATEST_INGESTION_ROW" \
 LATEST_PRICING_ROW="$LATEST_PRICING_ROW" \
-node <<'NODE'
-const fs = require('fs');
-const outputPath = process.env.ARTIFACT_JSON_PATH;
-const payload = {
-	timestampUtc: new Date().toISOString(),
-	hostedBaseUrl: process.env.HOSTED_BASE_URL,
-	statusUrl: process.env.STATUS_URL,
-	statusChecks: {
-		alertsLaunchState: process.env.ALERTS_LAUNCH,
-		subscriptionsApiEnabled: process.env.ALERTS_API === 'true',
-		workerDispatchEnabled: process.env.ALERTS_WORKER === 'true',
-		pendingAlertEventCount: Number(process.env.PENDING_ALERTS),
-		minutesSinceLastIngestion: Number(process.env.MINS_INGESTION),
-		minutesSinceLastPricingRefresh: Number(process.env.MINS_PRICING),
-		latestIngestionRunSuccess: process.env.LATEST_INGESTION_SUCCESS === 'true',
-		latestPricingRefreshRunSuccess: process.env.LATEST_PRICING_SUCCESS === 'true'
-	},
-	latestRows: {
-		ingestion: process.env.LATEST_INGESTION_ROW,
-		pricingRefresh: process.env.LATEST_PRICING_ROW
-	}
-};
-fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2));
-NODE
+node ./scripts/ops/write-hosted-verification-json.js
 
 echo "verification_passed=true"
 echo "artifact_text=${ARTIFACT_TEXT}"
