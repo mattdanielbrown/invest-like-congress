@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { shouldApplyDeterministicFallback, resolveDemoDataModeFromStatusSignals } from "./lib/demo-data-mode.js";
-import { createDatabaseClient } from "./lib/database-connection-config.js";
+import { connectDatabaseClient } from "./lib/database-connection-config.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
@@ -41,8 +41,7 @@ async function getVerifiedTransactionCount() {
 		throw new Error("DATABASE_URL is required.");
 	}
 
-	const client = createDatabaseClient(process.env.DATABASE_URL);
-	await client.connect();
+	const client = await connectDatabaseClient(process.env.DATABASE_URL);
 	try {
 		const result = await client.query(
 			`SELECT COUNT(*)::int AS count
@@ -60,8 +59,7 @@ async function getVerifiedDataCounts() {
 		throw new Error("DATABASE_URL is required.");
 	}
 
-	const client = createDatabaseClient(process.env.DATABASE_URL);
-	await client.connect();
+	const client = await connectDatabaseClient(process.env.DATABASE_URL);
 	try {
 		const result = await client.query(
 			`SELECT
