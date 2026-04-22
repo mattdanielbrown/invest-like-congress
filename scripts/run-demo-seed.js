@@ -1,9 +1,7 @@
-import pg from "pg";
+import { connectDatabaseClient } from "./lib/database-connection-config.js";
 import { loadEnvironmentFile } from "./lib/load-environment.js";
 
 loadEnvironmentFile();
-
-const { Client } = pg;
 
 const demoMembers = [
 	{ id: "demo-member-nancy-pelosi", fullName: "Nancy Pelosi", party: "D", stateCode: "CA", chamber: "house" },
@@ -317,8 +315,7 @@ async function run() {
 		process.exit(1);
 	}
 
-	const client = new Client({ connectionString: process.env.DATABASE_URL });
-	await client.connect();
+	const client = await connectDatabaseClient(process.env.DATABASE_URL);
 	try {
 		const seedRequired = await shouldSeedDemoData(client);
 		if (!seedRequired) {
