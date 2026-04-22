@@ -28,13 +28,12 @@ function parseLine(line) {
 	return { key, value };
 }
 
-export function loadEnvironmentFile() {
-	const envFilePath = path.resolve(process.cwd(), ".env");
-	if (!fs.existsSync(envFilePath)) {
+function loadEnvironmentVariablesFromFile(filePath) {
+	if (!fs.existsSync(filePath)) {
 		return;
 	}
 
-	const fileContent = fs.readFileSync(envFilePath, "utf8");
+	const fileContent = fs.readFileSync(filePath, "utf8");
 	const lines = fileContent.split(/\r?\n/);
 
 	for (const line of lines) {
@@ -42,9 +41,25 @@ export function loadEnvironmentFile() {
 		if (!parsed) {
 			continue;
 		}
+
 		if (process.env[parsed.key] !== undefined) {
 			continue;
 		}
+
 		process.env[parsed.key] = parsed.value;
+	}
+}
+
+export function loadEnvironmentFile() {
+	const currentWorkingDirectory = process.cwd();
+	const nodeEnvironment = process.env.NODE_ENV;
+	const candidateFileNames = [
+		".env.local",
+		nodeEnvironment ? `.env.${nodeEnvironment}` : null,
+		".env"
+	].filter(Boolean);
+
+	for (const fileName of candidateFileNames) {
+		loadEnvironmentVariablesFromFile(path.resolve(currentWorkingDirectory, fileName));
 	}
 }
