@@ -42,10 +42,6 @@ export function extractTextFromPdfBytes(pdfBytes: Uint8Array): string {
 }
 
 export function detectPdfExtractionIssue(pdfBytes: Uint8Array, extractedText: string): string | null {
-	if (hasUsableExtractedText(extractedText)) {
-		return null;
-	}
-
 	const pdfText = Buffer.from(pdfBytes).toString("latin1");
 	const imageObjectCount = countOccurrences(pdfText, "/Subtype/Image") + countOccurrences(pdfText, "/Subtype /Image");
 	const faxDecodeCount = countOccurrences(pdfText, "/CCITTFaxDecode");
@@ -54,6 +50,10 @@ export function detectPdfExtractionIssue(pdfBytes: Uint8Array, extractedText: st
 
 	if (imageObjectCount > 0 && faxDecodeCount > 0 && fontCount === 0 && toUnicodeCount === 0) {
 		return "pdf-image-only-no-text-layer";
+	}
+
+	if (hasUsableExtractedText(extractedText)) {
+		return null;
 	}
 
 	return "pdf-text-extraction-unreadable";
